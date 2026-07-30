@@ -1,0 +1,44 @@
+# Detection backend defaults.
+#
+# `backend` picks which wrapper runs; `weights` per backend is resolved relative to the
+# project root. CLI flags (--detector, --det-weights, --conf) override anything here.
+
+detector:
+  backend: yolo           # yolo | ssd | none
+  conf: 0.25
+  imgsz: null             # YOLO inference size; null keeps the checkpoint's own
+  # Box filter applied to both the captured and the restored pass.
+  min_width: 20
+  min_height: 20
+  min_area: 500
+  # true keeps only the highest-confidence box per class (the original demo's
+  # behaviour). false keeps every box, which is what metric code needs.
+  best_per_class: false
+
+weights:
+  yolo: weights/detector_yolo11s.pt
+  ssd: weights/detector_ssdlite.pth
+
+# 17 classes, ids 0..16. YOLO checkpoints carry their own names and those win unless
+# --classes is passed; torchvision (ssd) has none, so this list is used.
+names:
+  - Apple        # 0
+  - BlueBerry    # 1
+  - GreenApple   # 2
+  - Kiwi         # 3
+  - Lemon        # 4
+  - Melon        # 5
+  - Orange       # 6
+  - Peach        # 7
+  - Pear         # 8
+  - Punica       # 9
+  - Watermelon   # 10
+  - Cat          # 11
+  - Elephant     # 12
+  - Giraffe      # 13
+  - Monkey       # 14
+  - Shark        # 15
+  - Snake        # 16
+
+evaluate:
+  iou_threshold: 0.5      # IoU for a true positive when scoring against sample_gt

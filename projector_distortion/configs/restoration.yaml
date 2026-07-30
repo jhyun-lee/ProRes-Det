@@ -1,0 +1,51 @@
+# Restoration model defaults.
+#
+# `ablation` mirrors RestorationConfig. Leaving every flag true reproduces the
+# reference architecture exactly, which is what the shipped weights were trained as.
+# CLI flags (--no-ca, --base-dim, ...) override anything set here.
+
+model:
+  arch: restormer_like
+  weights: weights/restorer_restormerlike.pt
+  # Network input, (width, height). Fully convolutional, so this can differ from the
+  # 320x180 training patch without retraining.
+  input_size: [640, 360]
+  fp16: false
+
+ablation:
+  # RestormerLikeBlock internals
+  use_prenorm: true
+  use_naf_norm: true
+  use_simple_gate: true
+  use_naf_scale: true
+  use_ca: true
+  # U-Net skeleton
+  use_skip1: true
+  use_skip2: true
+  use_skip3: true
+  use_bottleneck: true
+  use_tanh: true
+  # capacity
+  base_dim: 48
+  enc_depth: [2, 2, 3]
+  dec_depth: [2, 2, 2]
+  bottleneck_depth: 2
+  dw_expand: 2
+  ffn_expand: 2
+  ca_reduction: 16
+  in_ch: 6            # cat([pro, beam])
+  out_ch: 3           # residual
+
+train:
+  epochs: 30
+  batch_size: 4
+  accum_steps: 4
+  lr: 0.0002
+  patch_size: [180, 320]      # (height, width) random crop
+  resize_to: [360, 640]       # (height, width) before cropping
+  # Loss weights from the Optuna sweep on this dataset.
+  loss:
+    l1: 0.9262
+    perceptual: 2.0369
+    ssim: 0.5319
+    wavelet: 0.8977

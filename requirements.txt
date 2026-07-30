@@ -1,0 +1,14 @@
+# Base install: everything demo.py / evaluate.py need with --detector ssd or none.
+torch>=1.13
+torchvision>=0.14
+opencv-python>=4.5
+numpy>=1.21
+PyYAML>=5.4
+tqdm>=4.60
+
+# Optional, installed via extras (see setup.py):
+#   pip install -e .[yolo]    ultralytics        --detector yolo
+#   pip install -e .[train]   pytorch-msssim pandas matplotlib   train.py
+#   pip install -e .[live]    screeninfo         demo.py --live on non-Windows
+#   pip install -e .[test]    pytest
+#   pip install -e .[all]     all of the above
