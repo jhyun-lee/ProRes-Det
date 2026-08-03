@@ -64,7 +64,7 @@ ProRes-Det/
 │
 ├── docs/                     README_running.ko.md — 스크립트별 옵션·입력·출력
 ├── tests/                    pytest 테스트
-├── weights/                  가중치 3개, git 에 없음 → README_weights.ko.md
+├── weights/                  가중치 3개 (51 MiB) → README_weights.ko.md
 ├── data/                     샘플 데이터셋 → README_data.ko.md
 └── output/                   실행 결과
 ```
@@ -90,9 +90,8 @@ ProRes-Det/
 
 ### 번들 데이터셋
 
-아래 샘플 데이터는 git 에 포함되어 있어 clone 직후 바로 있다.
-**단 `weights/` 의 체크포인트는 아니다** — `.gitignore` 가 `*.pt` / `*.pth` 를 제외한다.
-첫 실행 전에 따로 채워야 한다. [weights/README_weights.ko.md](weights/README_weights.ko.md) 참고.
+아래 샘플 데이터와 `weights/` 의 체크포인트 3개 모두 git 에 포함되어 있다.
+clone 직후 별도 다운로드 없이 바로 실행된다.
 
 | 경로 | 내용 | 쓰는 곳 |
 |---|---|---|

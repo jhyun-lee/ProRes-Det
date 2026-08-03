@@ -12,7 +12,5 @@ output/*
 !output/.gitkeep
 runs/
 
-# large weights - see README for download links
-weights/*.pt
-weights/*.pth
-!weights/README.md
+# weights/*.pt and *.pth are committed on purpose (51 MiB) so a clone runs as-is.
+# Checkpoints you train yourself land in runs/, which is ignored above.

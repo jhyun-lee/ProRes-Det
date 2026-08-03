@@ -1,10 +1,8 @@
 # weights/
 
-> **These files are not in git.** `.gitignore` excludes `weights/*.pt` and `*.pth`
-> (51 MiB in total), so a fresh clone has none of them and every script exits with
-> `restoration weights not found: …`. Obtain the three checkpoints separately and drop
-> them into this directory under the names below, or point at them with
-> `--restorer-weights` / `--det-weights`.
+These three checkpoints are committed to git (51 MiB in total), so a clone runs with
+no extra download. To use your own instead, point at them with `--restorer-weights` /
+`--det-weights` rather than overwriting these.
 
 ## Files
 

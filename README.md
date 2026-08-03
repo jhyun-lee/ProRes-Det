@@ -67,7 +67,7 @@ ProRes-Det/
 │
 ├── docs/                     README_running.md — per-script options, in/out
 ├── tests/                    pytest suite
-├── weights/                  3 checkpoints, not in git → README_weights.md
+├── weights/                  3 checkpoints (51 MiB) → README_weights.md
 ├── data/                     sample dataset → README_data.md
 └── output/                   run artefacts
 ```
@@ -93,9 +93,8 @@ ProRes-Det/
 
 ### Bundled dataset
 
-The sample data below is tracked in git, so it is there right after a clone.
-**The checkpoints under `weights/` are not** — `.gitignore` excludes `*.pt` / `*.pth`.
-Supply them before the first run, see [weights/README_weights.md](weights/README_weights.md).
+The sample data below and the three checkpoints under `weights/` are both tracked in
+git, so a clone runs as-is with nothing extra to download.
 
 | Path | Contents | Used as |
 |---|---|---|

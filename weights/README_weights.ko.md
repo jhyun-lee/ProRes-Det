@@ -1,9 +1,8 @@
 # weights/
 
-> **이 파일들은 git 에 없다.** `.gitignore` 가 `weights/*.pt`, `*.pth` 를 제외한다
-> (합계 51 MiB). 새로 clone 하면 하나도 없어서 모든 스크립트가
-> `restoration weights not found: …` 로 종료된다. 체크포인트 3개를 따로 받아서 아래 이름
-> 그대로 이 디렉토리에 넣거나, `--restorer-weights` / `--det-weights` 로 경로를 지정한다.
+체크포인트 3개가 git 에 포함되어 있다(합계 51 MiB). clone 직후 별도 다운로드 없이
+바로 실행된다. 다른 가중치를 쓰려면 이 파일들을 덮어쓰지 말고 `--restorer-weights` /
+`--det-weights` 로 경로를 지정한다.
 
 ## 파일
 
