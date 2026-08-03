@@ -1,15 +1,9 @@
-# projector_distortion/config.py
 """
-YAML config loading and the precedence rules.
+YAML config loading and precedence.
 
-Resolution order, lowest to highest:
-    1. the bundled configs/*.yaml
-    2. a file passed via --config
-    3. explicit CLI flags
-
-Paths inside a config are resolved relative to the project root (the directory holding
-`weights/` and `data/`), not the current working directory, so `python demo.py` works
-from anywhere.
+Lowest to highest: bundled configs/*.yaml -> a file passed via --config -> CLI flags.
+Paths inside a config resolve against the project root, not the working directory,
+so `python demo.py` works from anywhere.
 """
 
 import os
@@ -17,7 +11,6 @@ from typing import Any, Dict, Optional
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(_PKG_DIR, "configs")
-#: Repo root when running from a checkout; falls back to the package dir once installed.
 PROJECT_ROOT = os.path.dirname(_PKG_DIR)
 
 
@@ -42,11 +35,7 @@ def deep_merge(base: Dict, override: Dict) -> Dict:
 
 
 def load_config(name: str, extra: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Load `configs/<name>.yaml`, then merge `extra` (a path) on top when given.
-
-    `name` is 'restoration' or 'detection'.
-    """
+    """Load `configs/<name>.yaml` ('restoration' | 'detection'), then merge `extra`."""
     cfg = load_yaml(os.path.join(CONFIG_DIR, f"{name}.yaml"))
     if extra:
         if not os.path.exists(extra):
@@ -70,7 +59,7 @@ def pick(cli_value, cfg: Dict, *keys, default=None):
     """
     CLI wins when it is not None, otherwise walk `keys` through `cfg`.
 
-    pick(args.conf, det_cfg, "detector", "conf", default=0.25)
+        pick(args.conf, det_cfg, "detector", "conf", default=0.25)
     """
     if cli_value is not None:
         return cli_value

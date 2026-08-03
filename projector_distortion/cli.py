@@ -1,13 +1,10 @@
-# projector_distortion/cli.py
 """
 Shared CLI plumbing, and the console-script entry points declared in setup.py.
 
 demo.py / evaluate.py / train.py at the repo root are thin wrappers around
-`demo_main` / `evaluate_main` / `train_main` here, so `pip install` users get the same
-behaviour through `pdf-demo` etc.
+`demo_main` / `evaluate_main` / `train_main` here.
 """
 
-import argparse
 import os
 import sys
 from datetime import datetime
@@ -58,7 +55,7 @@ def build_models(args, need_detector=True):
     """
     Turn parsed args + YAML into (restorer, detector, info).
 
-    Config precedence is handled here so the three entry points stay identical on it.
+    Config precedence lives here so the three entry points stay identical on it.
     """
     from .data import load_class_names
     from .models import build_detector, build_restorer
@@ -69,7 +66,7 @@ def build_models(args, need_detector=True):
     device = resolve_device(args.device)
 
     weights = resolve_path(pick(args.restorer_weights, rest_cfg, "model", "weights"))
-    if not weights or not os.path.exists(weights or ""):
+    if not weights or not os.path.exists(weights):
         raise SystemExit(
             f"restoration weights not found: {weights}\n"
             f"    pass --restorer-weights <path>, or drop the file into "
@@ -86,9 +83,9 @@ def build_models(args, need_detector=True):
         ablation = from_yaml if from_yaml != RestorationConfig() else None
 
     input_size = pick(None, rest_cfg, "model", "input_size", default=[640, 360])
+    fp16 = bool(args.fp16 or rest_cfg.get("model", {}).get("fp16"))
     restorer = build_restorer(weights, device=device, cfg=ablation,
-                              input_size=tuple(input_size),
-                              fp16=bool(args.fp16 or rest_cfg.get("model", {}).get("fp16")))
+                              input_size=tuple(input_size), fp16=fp16)
     print(f"restorer: {restorer.describe()}")
     print(f"    {restorer.cfg.describe()}")
 
@@ -117,10 +114,12 @@ def build_models(args, need_detector=True):
 
 
 def box_filter_kwargs(args, det_cfg):
-    """min_area / best_per_class, CLI over YAML."""
+    """The box size gate + best_per_class, CLI over YAML."""
     best = getattr(args, "best_per_class", False) or pick(
         None, det_cfg, "detector", "best_per_class", default=False)
     return {
+        "min_width": int(pick(None, det_cfg, "detector", "min_width", default=20)),
+        "min_height": int(pick(None, det_cfg, "detector", "min_height", default=20)),
         "min_area": int(pick(None, det_cfg, "detector", "min_area", default=500)),
         "best_per_class": bool(best),
     }
@@ -135,12 +134,19 @@ def run_dir(base, name=None):
 
 
 def _delegate(module_name):
-    """Import a root-level script's main() without importing it at package import."""
+    """Import a root-level script's main(). Only works from a source checkout."""
     import importlib
-    root = PROJECT_ROOT
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    return importlib.import_module(module_name).main
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    try:
+        return importlib.import_module(module_name).main
+    except ImportError as e:
+        raise SystemExit(
+            f"could not import {module_name}.py from {PROJECT_ROOT}.\n"
+            f"    The pdf-* console scripts require an editable install of a "
+            f"checkout: pip install -e .\n"
+            f"    From a plain wheel, use the projector_distortion package directly."
+        ) from e
 
 
 def demo_main(argv=None):

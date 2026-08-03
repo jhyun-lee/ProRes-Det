@@ -1,25 +1,15 @@
-# projector_distortion/data.py
 """
 Sample discovery, ground truth loading, and the training dataset.
 
-FILE NAMING. The three views of one moment are tied together by ids in the filename:
+Filenames tie the views of one moment together (see data/README.md):
 
-    pro    projected_<oriId>_<beamId>.jpg   camera capture of the projected screen
-    beam   output_video_<beamId>.jpg        the frame the projector emitted
-    clean  Ori<oriId>.jpg                   the screen with no projection (GT)
-    label  Ori<oriId>.txt                   YOLO-format detection GT for that screen
+    pro    projected_<oriId>_<beamId>.jpg
+    beam   output_video_<beamId>.jpg
+    clean  Ori<oriId>.jpg
+    label  Ori<oriId>.txt
 
-    projected_0409001429_0404023332_294_75.jpg
-              |________|  |______________|
-                 oriId         beamId
-
-`oriId` must not contain '_' (everything up to the first '_' is the oriId); `beamId`
-may. One clean image usually serves several `pro` captures.
-
-DIRECTORY LAYOUT (both are auto-detected):
-
-    flat        <root>/pro/  <root>/beam/          + <gt>/clean/  <gt>/labels/
-    research    <root>/ProjectorImage/  OriginalImage/  BeamImage/
+`oriId` must not contain '_'; `beamId` may. Layouts 'flat' (pro/ beam/) and
+'research' (ProjectorImage/ BeamImage/ OriginalImage/) are auto-detected.
 """
 
 import os
@@ -31,8 +21,6 @@ import cv2
 import numpy as np
 
 from .utils.image import IMAGE_EXT, read_bgr, resize
-
-# --- layout detection ---------------------------------------------------------
 
 FLAT_DIRS = {"pro": "pro", "beam": "beam", "clean": "clean"}
 RESEARCH_DIRS = {"pro": "ProjectorImage", "beam": "BeamImage",
@@ -68,7 +56,6 @@ def resolve_dirs(root) -> Tuple[str, Dict[str, str]]:
     for layout, mapping in (("flat", FLAT_DIRS), ("research", RESEARCH_DIRS)):
         if os.path.isdir(os.path.join(root, mapping["pro"])):
             return layout, {k: os.path.join(root, v) for k, v in mapping.items()}
-    # a single folder holding everything mixed together
     if _images_in(root):
         return "mixed", {"pro": root, "beam": root, "clean": root}
     raise FileNotFoundError(
@@ -78,13 +65,11 @@ def resolve_dirs(root) -> Tuple[str, Dict[str, str]]:
     )
 
 
-# --- pair / triplet discovery -------------------------------------------------
-
 @dataclass(frozen=True)
 class Sample:
     """One inference unit. `clean` and `label` are optional (needed only to score)."""
 
-    name_id: str          # stem of the pro file, used for output filenames
+    name_id: str
     pro: str
     beam: str
     clean: Optional[str] = None
@@ -97,7 +82,7 @@ class Sample:
 
 def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
     """
-    Pair every `pro` image with its `beam`, and attach clean/label when available.
+    Pair every `pro` image with its `beam`, attaching clean/label when available.
 
     Unmatched `pro` files are skipped with a warning rather than failing the run.
     """
@@ -125,8 +110,7 @@ def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
 
     samples, skipped = [], []
     for fname, pro_path in pro_files.items():
-        bid = beam_id(fname)
-        beam_path = beam_by_id.get(bid)
+        beam_path = beam_by_id.get(beam_id(fname))
         if beam_path is None:
             skipped.append(fname)
             continue
@@ -150,15 +134,21 @@ def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
     return samples[:limit] if limit else samples
 
 
-def index_triplets(root, sample=0, seed=42) -> List[List[str]]:
-    """[[pro, clean, beam], ...] for training. Requires clean images to be present."""
+def index_triplets(root, clean_root=None, sample=0, seed=42) -> List[List[str]]:
+    """
+    [[pro, clean, beam], ...] for training.
+
+    `clean_root` overrides the clean directory implied by the layout, which is how
+    the bundled sample set trains: its clean targets live under data/sample_gt/.
+    """
     layout, dirs = resolve_dirs(root)
+    clean_dir = clean_root or dirs["clean"]
     pro_files = _images_in(dirs["pro"])
     beam_by_id = {beam_id(k): v for k, v in _images_in(dirs["beam"]).items()}
-    clean_by_id = {ori_id(k): v for k, v in _images_in(dirs["clean"]).items()}
+    clean_by_id = {ori_id(k): v for k, v in _images_in(clean_dir).items()}
     if not clean_by_id:
         raise FileNotFoundError(
-            f"training needs clean targets; none found in {dirs['clean']}")
+            f"training needs clean targets; none found in {clean_dir}")
 
     triplets = []
     for fname, pro_path in pro_files.items():
@@ -176,13 +166,8 @@ def index_triplets(root, sample=0, seed=42) -> List[List[str]]:
     return triplets
 
 
-# --- ground truth labels ------------------------------------------------------
-
 def load_yolo_labels(path, img_w, img_h) -> List[Tuple[int, Tuple[int, int, int, int]]]:
-    """
-    YOLO txt (`cls cx cy w h`, all normalised) -> [(cls_id, (x1,y1,x2,y2)), ...]
-    in pixels of an img_w x img_h image.
-    """
+    """YOLO txt (`cls cx cy w h`, normalised) -> [(cls_id, (x1,y1,x2,y2)), ...] pixels."""
     out = []
     if not path or not os.path.exists(path):
         return out
@@ -218,15 +203,13 @@ def load_class_names(path=None) -> Optional[List[str]]:
     return list(names)
 
 
-# --- training dataset ---------------------------------------------------------
-
 class TripletPatchDataset:
     """
     Resize each triplet to `big_size`, then take one shared random crop of `small_size`.
 
-    Returns (pro, beam, clean) as CHW float tensors in [-1, 1]. Implemented against the
-    torch Dataset protocol without importing it at module level, so `data.py` stays
-    usable for pure discovery when torch is absent.
+    Yields (pro, beam, clean) as CHW float tensors in [-1, 1]. A map-style dataset
+    that torch's DataLoader accepts directly; torch is imported per item so this
+    module stays usable for pure discovery when torch is absent.
     """
 
     def __init__(self, triplets: Sequence[Sequence[str]],
@@ -251,27 +234,11 @@ class TripletPatchDataset:
 
         top = random.randint(0, self.big_h - self.small_h)
         left = random.randint(0, self.big_w - self.small_w)
-        sl = (slice(top, top + self.small_h), slice(left, left + self.small_w))
+        crop = (slice(top, top + self.small_h), slice(left, left + self.small_w))
 
         def to_chw(img):
-            rgb = cv2.cvtColor(img[sl], cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(img[crop], cv2.COLOR_BGR2RGB)
             arr = rgb.astype(np.float32) / 127.5 - 1.0
             return torch.from_numpy(np.ascontiguousarray(arr.transpose(2, 0, 1)))
 
         return to_chw(pro), to_chw(beam), to_chw(clean)
-
-
-def torch_dataset(triplets, **kw):
-    """Wrap TripletPatchDataset as a real torch.utils.data.Dataset."""
-    from torch.utils.data import Dataset
-
-    inner = TripletPatchDataset(triplets, **kw)
-
-    class _DS(Dataset):
-        def __len__(self):
-            return len(inner)
-
-        def __getitem__(self, i):
-            return inner[i]
-
-    return _DS()

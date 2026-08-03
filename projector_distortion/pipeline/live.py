@@ -1,21 +1,14 @@
-# projector_distortion/pipeline/live.py
 """
-Live pipeline: webcam + projector rig.
+Live pipeline: webcam + projector rig. Needs real hardware.
 
     projector shows BeamVideo frame N
-    webcam captures it                      -> 4-point homography -> `pro`
-    the frame shown --offset frames ago      -> `beam`
+    webcam captures it                  -> 4-point homography -> `pro`
+    the frame shown --offset frames ago -> `beam`
     restore(pro, beam) -> detect both -> 2x2 panel + recorder
 
-Needs real hardware. Everything hardware-specific lives here:
-  * monitor enumeration and borderless fullscreen placement
-  * automatic (black/white flash) and manual (4 clicks) calibration
-  * the restore/detect worker thread
-
-WINDOWS NOTE. cv2.setWindowProperty(WND_PROP_FULLSCREEN) snaps the window back to the
-primary display, silently undoing cv2.moveWindow(); that is why a naive --screen has no
-effect. We drive the geometry through the Win32 API instead, which also removes the
-screeninfo dependency on Windows.
+On Windows, cv2.setWindowProperty(WND_PROP_FULLSCREEN) snaps the window back to the
+primary display and silently undoes cv2.moveWindow(), which is why a naive --screen
+has no effect. Geometry goes through the Win32 API instead.
 """
 
 import ctypes
@@ -48,17 +41,12 @@ def _step(msg):
     print(f"   . {msg}", flush=True)
 
 
-# =============================================================================
-# Warping
-# =============================================================================
-
 def order_corners(pts):
     """
-    Sort 4 arbitrary points into TL, TR, BR, BL.
+    Sort 4 arbitrary points into TL, TR, BR, BL, so click order stops mattering.
 
-    TL minimises x+y and BR maximises it; TR minimises y-x and BL maximises it. Holds
-    for any convex quad, including strong perspective trapezoids, so click order stops
-    mattering.
+    TL minimises x+y and BR maximises it; TR minimises y-x and BL maximises it.
+    Holds for any convex quad, including strong perspective trapezoids.
     """
     pts = np.asarray(pts, dtype=np.float32).reshape(4, 2)
     s = pts.sum(axis=1)
@@ -88,10 +76,6 @@ def warp(frame, matrix, w, h, out_size):
     """Rectify with a precomputed matrix, then resize to the model input."""
     return resize(cv2.warpPerspective(frame, matrix, (w, h)), out_size)
 
-
-# =============================================================================
-# Calibration
-# =============================================================================
 
 def _capture_mean(cap, frames=5, discard=4):
     """Average a few frames to suppress noise, discarding stale buffered ones first."""
@@ -129,12 +113,9 @@ def auto_calibrate(cap, projector_shape, settle=0.8, frames=5, min_area_frac=0.0
     Find the projected area's corners with no user input.
 
     Flashes black then white and diffs the two camera shots: only the projection
-    changes between them, so ambient light and bright room objects cancel out. The
-    largest 4-corner contour of that difference is the screen.
-
-    Returns 4 points in TL/TR/BR/BL order, or None so the caller can fall back to
-    manual clicking. `debug` (a dict) collects the intermediates - filled even on
-    failure, which is when they are worth looking at.
+    changes, so ambient light cancels out and the largest 4-corner contour of the
+    difference is the screen. Returns TL/TR/BR/BL, or None to fall back to manual
+    clicking. `debug` collects intermediates, filled even on failure.
     """
     dbg = debug if debug is not None else {}
     h, w = projector_shape[:2]
@@ -218,16 +199,12 @@ def manual_calibrate(cap, hold=1.0):
         cv2.destroyWindow(window)
 
 
-# =============================================================================
-# Camera + monitors
-# =============================================================================
-
 def open_webcam(index, backend="auto", width=None, height=None, fps=None):
     """
     Open a webcam and report what actually happened.
 
-    On Windows the default MSMF backend regularly stalls for tens of seconds opening a
-    camera (measured 20.8s vs 0.9s for DirectShow), so 'auto' tries DirectShow first.
+    On Windows the default MSMF backend regularly stalls for tens of seconds opening
+    a camera (measured 20.8s vs 0.9s for DirectShow), so 'auto' tries DirectShow first.
     """
     if backend == "auto":
         order = ([("dshow", cv2.CAP_DSHOW), ("msmf", cv2.CAP_MSMF)]
@@ -401,10 +378,6 @@ def place_window(screen_index, image=None, announce=True) -> Optional[Monitor]:
     return target
 
 
-# =============================================================================
-# Worker
-# =============================================================================
-
 @dataclass
 class LiveResult:
     """Field names match RunRecorder / offline.FrameResult."""
@@ -427,7 +400,7 @@ class LiveResult:
 
 
 def _worker(frame_queue, result_queue, restorer, detector, stop_event,
-            best_per_class=False, min_area=500):
+            best_per_class=False, min_area=500, min_width=20, min_height=20):
     from ..utils.visualize import draw_detections
 
     while not stop_event.is_set():
@@ -446,9 +419,10 @@ def _worker(frame_queue, result_queue, restorer, detector, stop_event,
         raw_r = detector(restored_clean)
         t_detect = time.perf_counter() - t1
 
-        kw = dict(min_area=min_area, best_per_class=best_per_class)
-        det_c = filter_detections(raw_c, **kw)
-        det_r = filter_detections(raw_r, **kw)
+        gate = dict(min_area=min_area, min_width=min_width, min_height=min_height,
+                    best_per_class=best_per_class)
+        det_c = filter_detections(raw_c, **gate)
+        det_r = filter_detections(raw_r, **gate)
 
         result = LiveResult(
             frame_id=frame_id, name_id=f"frame_{frame_id:06d}",
@@ -477,20 +451,16 @@ def build_panel(result, detector_name="detector") -> np.ndarray:
     )
 
 
-# =============================================================================
-# Main loop
-# =============================================================================
-
 def run_live(video, restorer, detector, recorder, background=None, camera=0,
              screen=1, offset=6, manual_calib=False, debug_view=False,
              max_frames=0, cam_size=(1280, 960), cam_fps=30, cam_backend="auto",
-             calib_settle=0.8, best_per_class=False, min_area=500,
-             detector_name="detector") -> Dict:
+             calib_settle=0.8, best_per_class=False, min_area=500, min_width=20,
+             min_height=20, detector_name="detector") -> Dict:
     """
     Drive the rig until the clip ends or 'q' is pressed. Returns a summary dict.
 
-    Calibration happens ONCE before the loop; the homography is then reused for every
-    frame. It is not re-estimated, so if the camera or projector moves mid-run the
+    Calibration happens ONCE before the loop and the homography is reused for every
+    frame. It is never re-estimated, so if the camera or projector moves mid-run the
     warp stays wrong - use debug_view to watch for that.
     """
     out_size = tuple(restorer.input_size)
@@ -533,7 +503,9 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     if points is None:
         points = manual_calibrate(cam)
     if points is None:
-        cam.release(); clip.release(); cv2.destroyAllWindows()
+        cam.release()
+        clip.release()
+        cv2.destroyAllWindows()
         raise RuntimeError("calibration aborted")
 
     w_cal, h_cal = warp_size(points)
@@ -542,7 +514,8 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
 
     ok, raw = cam.read()
     raw = raw if ok else None
-    warped_preview = warp(raw, matrix, w_cal, h_cal, out_size) if raw is not None else None
+    warped_preview = (warp(raw, matrix, w_cal, h_cal, out_size)
+                      if raw is not None else None)
     written = recorder.save_calibration(points, raw, warped_preview, calib_debug)
     print(f"calibration debug: {len(written)} image(s) -> {recorder.calib_dir}")
 
@@ -568,9 +541,11 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     _step("starting the restore/detect worker ...")
     frame_queue, result_queue = queue.Queue(maxsize=10), queue.Queue(maxsize=10)
     stop_event = threading.Event()
-    worker = threading.Thread(target=_worker, daemon=True, args=(
-        frame_queue, result_queue, restorer, detector, stop_event),
-        kwargs={"best_per_class": best_per_class, "min_area": min_area})
+    worker = threading.Thread(
+        target=_worker, daemon=True,
+        args=(frame_queue, result_queue, restorer, detector, stop_event),
+        kwargs={"best_per_class": best_per_class, "min_area": min_area,
+                "min_width": min_width, "min_height": min_height})
     worker.start()
 
     place_window(screen, announce=False)

@@ -1,15 +1,11 @@
-# projector_distortion/models/detection.py
 """
 Detection backends.
 
 Both wrappers return `list[Detection]` with a 0-based class id, so the pipeline never
-branches on which model is running.
+branches on which model is running. Label conventions differ upstream and are
+normalised here: ultralytics YOLO is already 0-based, torchvision heads emit the
+COCO category id (1..N, with 0 = background).
 
-Label conventions differ upstream and are normalised here:
-    ultralytics YOLO     already 0-based
-    torchvision heads    emit the COCO category id, i.e. 1..N with 0 = background
-
-Shipped weights were fine-tuned on a 17-class set (see configs/detection.yaml).
 Adding a backend is a subclass plus `@register_detector("key")`.
 """
 
@@ -22,7 +18,7 @@ import torch
 
 from .base import BaseDetector, Detection, register_detector
 
-#: Default class list; the YAML config and YOLO checkpoints can override it.
+# Default class list; the YAML config and YOLO checkpoints can override it.
 CLASS_NAMES = [
     "Apple", "BlueBerry", "GreenApple", "Kiwi", "Lemon", "Melon", "Orange",
     "Peach", "Pear", "Punica", "Watermelon", "Cat", "Elephant", "Giraffe",
@@ -61,8 +57,8 @@ class YoloDetector(BaseDetector):
         self.weights = weights
         self.imgsz = imgsz
 
-        # A YOLO checkpoint carries its own names. Prefer them unless the caller was
-        # explicit - the shipped yolo11n weights cover a smaller subset than yolo11s.
+        # A YOLO checkpoint carries its own names; prefer them unless the caller
+        # was explicit, since checkpoints differ in how many classes they cover.
         names = getattr(self.model, "names", None)
         if class_names is None and names:
             class_names = ([names[k] for k in sorted(names)]
@@ -93,7 +89,7 @@ class YoloDetector(BaseDetector):
 @register_detector("ssd")
 class SsdDetector(BaseDetector):
     """
-    torchvision `ssdlite320_mobilenet_v3_large`, torchvision only - no extra deps.
+    torchvision `ssdlite320_mobilenet_v3_large`; no dependency beyond torchvision.
 
     The classification head is rebuilt for the fine-tuned class count before the
     weights load, matching how the checkpoint was produced.
@@ -143,9 +139,9 @@ class SsdDetector(BaseDetector):
             score = float(score)
             if score < self.conf:
                 continue
-            cls_id = int(label) - 1          # torchvision label == COCO id (1..N)
+            cls_id = int(label) - 1          # torchvision label is the COCO id, 1..N
             if cls_id < 0:
-                continue                     # background
+                continue
             out.append(Detection(cls_id, self.label_of(cls_id), score,
                                  box.numpy().astype(int).tolist()))
         return out
@@ -176,8 +172,8 @@ def filter_detections(detections, min_width=20, min_height=20, min_area=500,
     """
     Drop boxes below the size gate; optionally keep only the top box per class.
 
-    best_per_class mirrors the original demo's behaviour. It defaults to False here
-    because metric code needs every box.
+    best_per_class mirrors the original demo. It defaults to False because metric
+    code needs every box.
     """
     kept = [d for d in detections
             if (d.box[2] - d.box[0]) >= min_width

@@ -63,25 +63,26 @@ def build_parser():
     live.add_argument("--live", action="store_true", help="drive a webcam + projector")
     live.add_argument("--clip", default=DEFAULT_LIVE_VIDEO, help="clip to project")
     live.add_argument("--background", default=DEFAULT_LIVE_BG,
-                     help="image shown during calibration")
+                      help="image shown during calibration")
     live.add_argument("--camera", type=int, default=0, help="webcam index")
     live.add_argument("--screen", type=int, default=1,
-                     help="monitor index for the fullscreen window (0 = primary; the "
-                          "table printed at startup lists them)")
+                      help="monitor index for the fullscreen window (0 = primary; the "
+                           "table printed at startup lists them)")
     live.add_argument("--offset", type=int, default=6,
-                     help="projector->camera latency, in frames")
+                      help="projector->camera latency, in frames")
     live.add_argument("--manual-calib", action="store_true",
-                     help="click the 4 corners instead of auto-detecting them")
+                      help="click the 4 corners instead of auto-detecting them")
     live.add_argument("--debug-view", action="store_true",
-                     help="live window with the pre-warp camera feed + the quad")
+                      help="live window with the pre-warp camera feed + the quad")
     live.add_argument("--cam-width", type=int, default=1280)
     live.add_argument("--cam-height", type=int, default=960)
     live.add_argument("--cam-fps", type=int, default=30)
     live.add_argument("--cam-backend", default="auto",
-                     choices=["auto", "any", "dshow", "msmf", "v4l2"])
+                      choices=["auto", "any", "dshow", "msmf", "v4l2"])
     live.add_argument("--calib-settle", type=float, default=0.8,
-                     help="seconds to wait after each calibration flash")
-    live.add_argument("--max-frames", type=int, default=0, help="0 = until the clip ends")
+                      help="seconds to wait after each calibration flash")
+    live.add_argument("--max-frames", type=int, default=0,
+                      help="0 = until the clip ends")
 
     add_common_args(p)
     # Only needed when the checkpoint is a bare state_dict with no embedded config.
@@ -94,8 +95,7 @@ def main(argv=None):
     kinds = parse_kinds(args.save_kinds)
 
     restorer, detector, info = build_models(args, need_detector=True)
-    det_cfg = info["detection_config"]
-    filt = box_filter_kwargs(args, det_cfg)
+    box_filter = box_filter_kwargs(args, info["detection_config"])
     out_dir = run_dir(args.output, args.name)
 
     panel_w, panel_h = restorer.input_size[0] * 2, restorer.input_size[1] * 2
@@ -107,7 +107,7 @@ def main(argv=None):
                      video_size=(panel_w, panel_h) if want_video else None) as rec:
         rec.set(mode="live" if args.live else "offline",
                 restorer=restorer.info(), detector=detector.info(),
-                box_filter=filt, device=info["device"],
+                box_filter=box_filter, device=info["device"],
                 recording={"save_every": args.save_every, "frame_kinds": list(kinds),
                            "jpeg_quality": args.jpeg_quality,
                            "max_saved_frames": args.max_saved_frames,
@@ -115,46 +115,58 @@ def main(argv=None):
         print(f"output: {out_dir}")
 
         if args.live:
-            import cv2
-
-            from projector_distortion.pipeline.live import run_live
-            bg_path = resolve_path(args.background)
-            background = cv2.imread(bg_path) if bg_path else None
-            if background is None:
-                print(f"warning: background image not found ({args.background}); "
-                      f"using a flat grey frame.")
-            clip = resolve_path(args.clip)
-            if not clip or not os.path.exists(clip):
-                raise SystemExit(f"projector clip not found: {args.clip}")
-            summary = run_live(
-                clip, restorer, detector, rec, background=background,
-                camera=args.camera, screen=args.screen, offset=args.offset,
-                manual_calib=args.manual_calib, debug_view=args.debug_view,
-                max_frames=args.max_frames,
-                cam_size=(args.cam_width, args.cam_height), cam_fps=args.cam_fps,
-                cam_backend=args.cam_backend, calib_settle=args.calib_settle,
-                detector_name=detector.name, **filt)
+            summary = _run_live(args, restorer, detector, rec, box_filter)
         else:
-            from projector_distortion.pipeline import run_offline
-            input_root = resolve_path(args.input)
-            gt_root = resolve_path(args.gt)
-            if not input_root or not os.path.isdir(input_root):
-                raise SystemExit(
-                    f"input folder not found: {args.input}\n"
-                    f"    expected pro/ and beam/ subfolders; see data/README.md")
-            n_pairs = len(os.listdir(os.path.join(input_root, "pro"))) \
-                if os.path.isdir(os.path.join(input_root, "pro")) else 0
-            budget = estimate_footprint_mb(kinds, args.save_every, n_pairs)
-            print(f"    images every {args.save_every or '-'} frames x {len(kinds)} "
-                  f"kinds ~ {budget:.0f} MB")
-            summary = run_offline(
-                input_root, restorer, detector, rec, gt_root=gt_root,
-                limit=args.limit, detector_name=detector.name, **filt)
+            summary = _run_offline(args, restorer, detector, rec, box_filter, kinds)
 
         meta = rec.finish(**summary)
 
     _report(meta, summary, detector, out_dir)
     return 0
+
+
+def _run_live(args, restorer, detector, rec, box_filter):
+    import cv2
+
+    from projector_distortion.pipeline.live import run_live
+
+    bg_path = resolve_path(args.background)
+    background = cv2.imread(bg_path) if bg_path else None
+    if background is None:
+        print(f"warning: background image not found ({args.background}); "
+              f"using a flat grey frame.")
+    clip = resolve_path(args.clip)
+    if not clip or not os.path.exists(clip):
+        raise SystemExit(f"projector clip not found: {args.clip}")
+
+    return run_live(
+        clip, restorer, detector, rec, background=background,
+        camera=args.camera, screen=args.screen, offset=args.offset,
+        manual_calib=args.manual_calib, debug_view=args.debug_view,
+        max_frames=args.max_frames,
+        cam_size=(args.cam_width, args.cam_height), cam_fps=args.cam_fps,
+        cam_backend=args.cam_backend, calib_settle=args.calib_settle,
+        detector_name=detector.name, **box_filter)
+
+
+def _run_offline(args, restorer, detector, rec, box_filter, kinds):
+    from projector_distortion.pipeline import run_offline
+
+    input_root = resolve_path(args.input)
+    gt_root = resolve_path(args.gt)
+    if not input_root or not os.path.isdir(input_root):
+        raise SystemExit(
+            f"input folder not found: {args.input}\n"
+            f"    expected pro/ and beam/ subfolders; see data/README.md")
+
+    pro_dir = os.path.join(input_root, "pro")
+    n_pairs = len(os.listdir(pro_dir)) if os.path.isdir(pro_dir) else 0
+    budget = estimate_footprint_mb(kinds, args.save_every, n_pairs)
+    print(f"    images every {args.save_every or '-'} frames x {len(kinds)} "
+          f"kinds ~ {budget:.0f} MB")
+
+    return run_offline(input_root, restorer, detector, rec, gt_root=gt_root,
+                       limit=args.limit, detector_name=detector.name, **box_filter)
 
 
 def _report(meta, summary, detector, out_dir):
@@ -170,7 +182,8 @@ def _report(meta, summary, detector, out_dir):
 
     t = summary.get("detections_total", {})
     if detector.name != "none" and t:
-        per = summary.get("detections_per_image") or summary.get("detections_per_frame", {})
+        per = (summary.get("detections_per_image")
+               or summary.get("detections_per_frame", {}))
         delta = summary.get("detection_delta_pct")
         print(f"  {detector.name} boxes: captured {t.get('captured')} "
               f"({per.get('captured')}/frame) -> restored {t.get('restored')} "

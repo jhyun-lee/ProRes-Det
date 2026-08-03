@@ -1,16 +1,12 @@
-# projector_distortion/models/base.py
 """
-Interfaces every swappable module must satisfy.
-
-The point of the framework is that a restorer or a detector can be replaced without
-touching the pipeline. Two contracts do that:
+The two contracts that make restoration and detection swappable.
 
     Restorer.restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)
     Detector.detect(bgr)                -> list[Detection]
 
-`pro` is the camera's view of the projected screen, `beam` is the frame the projector
-emitted at that moment. Restorers predict the *residual* (what to subtract) rather
-than the clean image directly, which is what the shipped weights were trained for.
+`pro` is the camera's view of the projected screen, `beam` is the frame the
+projector emitted at that moment. Restorers predict the *residual* to subtract,
+not the clean image directly.
 """
 
 from abc import ABC, abstractmethod
@@ -22,7 +18,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Detection:
-    """One detected box. `box` is (x1, y1, x2, y2) in pixels of the image passed in."""
+    """One box; `box` is (x1, y1, x2, y2) in pixels of the image passed to detect()."""
 
     cls_id: int
     name: str
@@ -44,7 +40,6 @@ class BaseRestorer(ABC):
     """Removes projector light from a camera capture."""
 
     name = "base-restorer"
-    #: (width, height) the network expects; the pipeline resizes to this.
     input_size: Tuple[int, int] = (640, 360)
 
     @abstractmethod
@@ -55,11 +50,11 @@ class BaseRestorer(ABC):
     def restore_full(self, pro_bgr: np.ndarray, beam_bgr: np.ndarray
                      ) -> Tuple[np.ndarray, np.ndarray, float]:
         """
-        Same as restore(), plus mean |residual| in the network's own [-1, 1] units.
+        restore() plus mean |residual| in the network's own [-1, 1] units.
 
-        The residual image is a colourmapped visualisation, so the scalar cannot be
-        recovered from it. Subclasses that can report it cheaply should override this;
-        the default returns 0.0 rather than a wrong number.
+        The residual image is colourmapped, so the scalar cannot be recovered from
+        it. The default returns 0.0 rather than a wrong number; subclasses that
+        know the value should override.
         """
         restored, residual = self.restore(pro_bgr, beam_bgr)
         return restored, residual, 0.0
@@ -71,7 +66,6 @@ class BaseRestorer(ABC):
         return self.name
 
     def info(self) -> Dict:
-        """Serialisable description, embedded in run metadata."""
         return {"name": self.name, "input_size": list(self.input_size)}
 
 
@@ -118,14 +112,11 @@ class NullDetector(BaseDetector):
         return "none (detection disabled)"
 
 
-# --- registry -----------------------------------------------------------------
-# Adding a backend is one decorator plus a class. Nothing else in the package
-# needs to know the new name exists.
-
 _DETECTORS: Dict[str, type] = {}
 
 
 def register_detector(key: str):
+    """Decorator adding a BaseDetector subclass to the backend registry."""
     def deco(cls):
         if not issubclass(cls, BaseDetector):
             raise TypeError(f"{cls.__name__} must subclass BaseDetector")

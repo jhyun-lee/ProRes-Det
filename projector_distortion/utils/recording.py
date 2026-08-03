@@ -1,17 +1,16 @@
-# projector_distortion/utils/recording.py
 """
 RunRecorder - owns everything a run writes to disk.
 
     output/<run_name>/
       run_meta.json      config, environment, calibration, summary
-      detections.csv     one row per box, tagged by source (captured | restored)
-      frames.csv         one row per frame / image
+      detections.csv     one row per box, tagged captured | restored
+      frames.csv         one row per frame
       calib/             calibration evidence (live runs only)
       frames/            sampled images, `save_every` apart
-      result.mp4         2x2 panel (live runs only)
+      result.mp4         2x2 panel
 
-Images are split into clean and annotated variants. Keeping the clean copy is what
-makes PSNR/SSIM and re-running a different detector possible after the fact.
+Images are split into clean and annotated variants; keeping the clean copy is what
+makes PSNR/SSIM and a later re-run with another detector possible.
 """
 
 import csv
@@ -24,7 +23,6 @@ from datetime import datetime
 
 import cv2
 
-#: Every image kind a frame can produce. All are written by default.
 FRAME_KINDS = ("beam", "captured", "captured_det", "restored", "restored_det",
                "residual", "panel", "raw")
 DEFAULT_FRAME_KINDS = FRAME_KINDS
@@ -34,6 +32,10 @@ DETECTION_FIELDS = ["frame_id", "name_id", "source", "cls_id", "name", "conf",
 FRAME_FIELDS = ["frame_id", "name_id", "t_wall", "n_captured", "n_restored",
                 "residual_mean", "t_restore_ms", "t_detect_ms", "psnr", "ssim", "saved"]
 
+# Measured at jpeg quality 92: 640x360 tiles, 1280x720 panel, full-frame raw.
+_KB_PER_KIND = {"beam": 53, "captured": 53, "captured_det": 53, "restored": 53,
+                "restored_det": 53, "residual": 68, "panel": 210, "raw": 136}
+
 
 def parse_kinds(text):
     """'restored,panel' -> ('restored', 'panel'); raises on an unknown name."""
@@ -42,11 +44,6 @@ def parse_kinds(text):
     if unknown:
         raise ValueError(f"unknown image kinds {unknown}; choose from {list(FRAME_KINDS)}")
     return tuple(kinds)
-
-
-#: Measured at jpeg quality 92 on 640x360 tiles (panel is 1280x720, raw is full frame).
-_KB_PER_KIND = {"beam": 53, "captured": 53, "captured_det": 53, "restored": 53,
-                "restored_det": 53, "residual": 68, "panel": 210, "raw": 136}
 
 
 def estimate_footprint_mb(kinds, save_every, total_frames):
@@ -105,8 +102,6 @@ class RunRecorder:
         self._frm = csv.writer(self._frm_fh)
         self._frm.writerow(FRAME_FIELDS)
 
-    # ---- metadata --------------------------------------------------------
-
     def set(self, **kwargs):
         self.meta.update(kwargs)
         self._flush_meta()
@@ -115,13 +110,11 @@ class RunRecorder:
         with open(os.path.join(self.dir, "run_meta.json"), "w", encoding="utf-8") as f:
             json.dump(self.meta, f, indent=2, ensure_ascii=False, default=str)
 
-    # ---- calibration (live runs) -----------------------------------------
-
     def save_calibration(self, points, raw_frame=None, warped=None, debug=None):
         """
-        Write the pre-warp camera view with the quad on it, the rectified result, and
-        any auto-calibration intermediates. Populated even when detection failed,
-        which is when they matter most.
+        Write the pre-warp view with the quad, the rectified result, and the
+        auto-calibration intermediates. Written even when detection failed, which
+        is when they matter most.
         """
         from .visualize import draw_quad
 
@@ -143,8 +136,6 @@ class RunRecorder:
                 written.append(self._imwrite(
                     os.path.join(self.calib_dir, f"{key}.jpg"), img))
         return [w for w in written if w]
-
-    # ---- per frame -------------------------------------------------------
 
     def should_save(self, frame_id):
         if not self.save_every or not self.frame_kinds:
@@ -203,8 +194,6 @@ class RunRecorder:
             return None
         self.bytes_written += os.path.getsize(path)
         return path
-
-    # ---- lifecycle -------------------------------------------------------
 
     def finish(self, **summary):
         self.meta["finished_at"] = datetime.now().isoformat(timespec="seconds")

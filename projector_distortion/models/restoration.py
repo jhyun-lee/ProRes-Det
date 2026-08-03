@@ -1,30 +1,21 @@
-# projector_distortion/models/restoration.py
 """
 Restoration network, its config, and the BaseRestorer wrapper.
 
-Architecture is a 3-level U-Net of RestormerLikeBlock, ported from
-`Another_ModelDefine.build_restor_like()` in the original research repo. With the
-default config the module graph, parameter names and tensor shapes are identical to
-that reference, so checkpoints trained there load unchanged.
+A 3-level U-Net of RestormerLikeBlock (LayerNorm2d -> NAFBlock -> CALayer):
 
     input  (B, 6, H, W) = cat([pro, beam]) in [-1, 1]
     output (B, 3, H, W) = residual
     restored = (pro - residual).clamp(-1, 1)
 
-NOTE ON THE NAME. `RestormerLikeBlock` is LayerNorm2d -> NAFBlock -> CALayer. It has
-no MDTA attention, so it is *not* Restormer; the upstream file calls these
-"lightweight proxies ... baselines for measurement only". Functionally it is closer to
-NAFNet + squeeze-excite. It is fully convolutional, which is why the 180x320 training
+Despite the name there is no MDTA attention here, so this is NAFNet + squeeze-excite
+rather than Restormer. It is fully convolutional, which is why the 180x320 training
 patch and the 640x360 inference size behave identically.
-
-Every structural piece can be switched off through `RestorationConfig`, which is how
-the ablation study was run.
 """
 
+import os
 from dataclasses import asdict, dataclass, fields
 from typing import Dict, Optional, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,35 +27,28 @@ CHECKPOINT_FORMAT = 2
 ARCH_NAME = "restormer_like"
 
 
-# =============================================================================
-# Config
-# =============================================================================
-
 @dataclass
 class RestorationConfig:
     """
-    Structural toggles + capacity. Defaults reproduce the reference model exactly.
+    Structural toggles + capacity; the defaults reproduce the reference model.
 
-    The `use_*` flags exist so a component's contribution can be measured by turning
-    it off and retraining; they also travel inside the checkpoint so inference never
-    has to guess which variant produced the weights.
+    Turning a `use_*` flag off and retraining measures that component's
+    contribution. The config travels inside the checkpoint, so inference never has
+    to guess which variant produced the weights. TOGGLE_HELP describes each flag.
     """
 
-    # RestormerLikeBlock internals
-    use_prenorm: bool = True        # pre-LayerNorm in front of the NAF body
-    use_naf_norm: bool = True       # LayerNorm2d at NAFBlock norm1 / norm2
-    use_simple_gate: bool = True    # SimpleGate (x1*x2) vs plain GELU
-    use_naf_scale: bool = True      # learnable residual scales beta / gamma
-    use_ca: bool = True             # channel attention after the block
+    use_prenorm: bool = True
+    use_naf_norm: bool = True
+    use_simple_gate: bool = True
+    use_naf_scale: bool = True
+    use_ca: bool = True
 
-    # U-Net skeleton
-    use_skip1: bool = True          # skip enc1 -> dec1 (full res)
-    use_skip2: bool = True          # skip enc2 -> dec2 (1/2 res)
-    use_skip3: bool = True          # skip enc3 -> dec3 (1/4 res)
-    use_bottleneck: bool = True     # bottleneck stage at 1/8 res
-    use_tanh: bool = True           # output tanh (residual bounded to [-1, 1])
+    use_skip1: bool = True
+    use_skip2: bool = True
+    use_skip3: bool = True
+    use_bottleneck: bool = True
+    use_tanh: bool = True
 
-    # capacity
     base_dim: int = 48
     enc_depth: Tuple[int, int, int] = (2, 2, 3)
     dec_depth: Tuple[int, int, int] = (2, 2, 2)
@@ -72,8 +56,8 @@ class RestorationConfig:
     dw_expand: int = 2
     ffn_expand: int = 2
     ca_reduction: int = 16
-    in_ch: int = 6                  # [pro | beam]
-    out_ch: int = 3                 # residual
+    in_ch: int = 6
+    out_ch: int = 3
 
     def __post_init__(self):
         # torch.save/load and YAML round-trips turn tuples into lists
@@ -92,7 +76,7 @@ class RestorationConfig:
         return self == RestorationConfig()
 
     def tag(self) -> str:
-        """'FULL' when nothing is ablated, else 'NoCA-NoSkip3'."""
+        """'FULL' when nothing is ablated, else e.g. 'NoCA-NoSkip3'."""
         off = [t for a, _, t in TOGGLES if not getattr(self, a)]
         return "-".join(off) if off else "FULL"
 
@@ -105,7 +89,7 @@ class RestorationConfig:
                 f"    OFF : {', '.join(off) or '(none)'}")
 
 
-#: (config attribute, CLI flag, short tag)
+# (config attribute, CLI flag, short tag)
 TOGGLES = [
     ("use_prenorm", "no-prenorm", "NoPre"),
     ("use_naf_norm", "no-naf-norm", "NoNorm"),
@@ -134,7 +118,7 @@ TOGGLE_HELP = {
 
 
 def add_ablation_args(parser, capacity: bool = True):
-    """Register --no-* toggles (and optionally the capacity overrides)."""
+    """Register the --no-* toggles, and optionally the capacity overrides."""
     g = parser.add_argument_group("restoration ablation")
     for _, flag, _ in TOGGLES:
         g.add_argument(f"--{flag}", action="store_true", help=TOGGLE_HELP[flag])
@@ -170,9 +154,7 @@ def config_from_args(args) -> RestorationConfig:
     return RestorationConfig(**kw)
 
 
-# =============================================================================
-# Blocks  (attribute names must not change - checkpoints key off them)
-# =============================================================================
+# Attribute names below must not change - checkpoints key off them.
 
 class LayerNorm2d(nn.Module):
     def __init__(self, c):
@@ -184,7 +166,7 @@ class LayerNorm2d(nn.Module):
 
 
 class SimpleGate(nn.Module):
-    """Splits channels in half and multiplies -> output has C/2 channels."""
+    """Splits channels in half and multiplies, so the output has C/2 channels."""
 
     def forward(self, x):
         x1, x2 = x.chunk(2, dim=1)
@@ -209,12 +191,7 @@ class CALayer(nn.Module):
 
 
 class NAFBlock(nn.Module):
-    """
-    NAFNet-style block.
-
-    With use_simple_gate off, GELU keeps the channel count instead of halving it, so
-    conv3 / conv5 widen to match - a different shape, hence a different checkpoint.
-    """
+    """NAFNet-style block. Without SimpleGate, conv3/conv5 widen to match GELU."""
 
     def __init__(self, c, dw_expand=2, ffn_expand=2, cfg: RestorationConfig = None):
         super().__init__()
@@ -248,11 +225,7 @@ class NAFBlock(nn.Module):
 
 
 class RestormerLikeBlock(nn.Module):
-    """
-    LayerNorm -> NAFBlock -> channel attention.
-
-    With use_prenorm and use_ca both off this degenerates to a plain NAFBlock.
-    """
+    """LayerNorm -> NAFBlock -> channel attention."""
 
     def __init__(self, c, cfg: RestorationConfig = None):
         super().__init__()
@@ -265,10 +238,6 @@ class RestormerLikeBlock(nn.Module):
         return self.ca(x + self.body(self.pre(x)))
 
 
-# =============================================================================
-# Network
-# =============================================================================
-
 class RestorationNet(nn.Module):
     """3-level encoder / bottleneck / 3-level decoder over RestormerLikeBlock."""
 
@@ -277,32 +246,34 @@ class RestorationNet(nn.Module):
         cfg = cfg or RestorationConfig()
         self.cfg = cfg
         bd, ed, dd = cfg.base_dim, cfg.enc_depth, cfg.dec_depth
-        block = lambda c: RestormerLikeBlock(c, cfg)  # noqa: E731
+
+        def stage(channels, depth):
+            return nn.Sequential(*[RestormerLikeBlock(channels, cfg)
+                                   for _ in range(depth)])
 
         self.stem = nn.Conv2d(cfg.in_ch, bd, 3, 1, 1)
 
-        self.enc1 = nn.Sequential(*[block(bd) for _ in range(ed[0])])
+        self.enc1 = stage(bd, ed[0])
         self.down1 = nn.Conv2d(bd, bd * 2, 2, 2)
-        self.enc2 = nn.Sequential(*[block(bd * 2) for _ in range(ed[1])])
+        self.enc2 = stage(bd * 2, ed[1])
         self.down2 = nn.Conv2d(bd * 2, bd * 4, 2, 2)
-        self.enc3 = nn.Sequential(*[block(bd * 4) for _ in range(ed[2])])
+        self.enc3 = stage(bd * 4, ed[2])
         self.down3 = nn.Conv2d(bd * 4, bd * 8, 2, 2)
 
-        self.bottleneck = (
-            nn.Sequential(*[block(bd * 8) for _ in range(cfg.bottleneck_depth)])
-            if cfg.use_bottleneck else nn.Identity())
+        self.bottleneck = (stage(bd * 8, cfg.bottleneck_depth)
+                           if cfg.use_bottleneck else nn.Identity())
 
         self.up3 = nn.ConvTranspose2d(bd * 8, bd * 4, 2, 2)
         self.j3 = nn.Conv2d(bd * 4 * (2 if cfg.use_skip3 else 1), bd * 4, 1)
-        self.dec3 = nn.Sequential(*[block(bd * 4) for _ in range(dd[0])])
+        self.dec3 = stage(bd * 4, dd[0])
 
         self.up2 = nn.ConvTranspose2d(bd * 4, bd * 2, 2, 2)
         self.j2 = nn.Conv2d(bd * 2 * (2 if cfg.use_skip2 else 1), bd * 2, 1)
-        self.dec2 = nn.Sequential(*[block(bd * 2) for _ in range(dd[1])])
+        self.dec2 = stage(bd * 2, dd[1])
 
         self.up1 = nn.ConvTranspose2d(bd * 2, bd, 2, 2)
         self.j1 = nn.Conv2d(bd * (2 if cfg.use_skip1 else 1), bd, 1)
-        self.dec1 = nn.Sequential(*[block(bd) for _ in range(dd[2])])
+        self.dec1 = stage(bd, dd[2])
 
         self.out = nn.Sequential(
             nn.Conv2d(bd, bd // 2, 3, 1, 1),
@@ -340,13 +311,8 @@ def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-# =============================================================================
-# Checkpoint I/O
-# =============================================================================
-
 def save_checkpoint(path, model: nn.Module, cfg: RestorationConfig, **extra):
     """Write weights with the config embedded, so loading never has to guess."""
-    import os
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     blob = {"format": CHECKPOINT_FORMAT, "arch": ARCH_NAME,
             "cfg": cfg.to_dict(), "state_dict": model.state_dict()}
@@ -373,11 +339,9 @@ def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
     """
     Returns (network, cfg, meta).
 
-    An explicit `cfg` wins. Otherwise the config embedded in the checkpoint is used;
-    for a bare state_dict (the legacy format) it falls back to the defaults, which
-    reproduce the reference model.
+    An explicit `cfg` wins; otherwise the config embedded in the checkpoint is used.
+    A bare state_dict (the legacy format) falls back to the defaults.
     """
-    import os
     if not os.path.exists(path):
         raise FileNotFoundError(f"restoration checkpoint not found: {path}")
 
@@ -402,17 +366,8 @@ def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
     return model, used, meta
 
 
-# =============================================================================
-# BaseRestorer wrapper
-# =============================================================================
-
 class RestormerLikeRestorer(BaseRestorer):
-    """
-    Glue between RestorationNet and the pipeline.
-
-    Handles normalisation, the residual convention, autocast and the numpy <-> tensor
-    round trip so nothing downstream deals with tensors.
-    """
+    """Owns normalisation, autocast and the numpy <-> tensor round trip."""
 
     name = "restormer_like"
 
@@ -448,19 +403,17 @@ class RestormerLikeRestorer(BaseRestorer):
                 residual_to_bgr(residual, self.input_size))
 
     def restore_full(self, pro_bgr, beam_bgr):
-        """restore() plus mean |residual| - one forward pass, not two."""
+        """restore() plus mean |residual|, from one forward pass rather than two."""
         restored, residual = self._forward(pro_bgr, beam_bgr)
         return (tensor_to_bgr(restored, self.input_size),
                 residual_to_bgr(residual, self.input_size),
                 float(residual.abs().mean()))
 
     def describe(self):
-        import os
         return (f"{self.name} [{self.cfg.tag()}] {os.path.basename(str(self.weights))} "
                 f"({self.params:,} params, cfg from {self.meta.get('cfg_source')})")
 
     def info(self) -> Dict:
-        import os
         return {"name": self.name, "weights": os.path.abspath(str(self.weights)),
                 "params": self.params, "cfg": self.cfg.to_dict(),
                 "cfg_source": self.meta.get("cfg_source"), "fp16": self.fp16,

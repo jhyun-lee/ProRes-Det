@@ -22,7 +22,6 @@ import argparse
 import gc
 import os
 import sys
-import time
 from datetime import datetime
 
 import numpy as np
@@ -36,23 +35,21 @@ from torch.utils.data import DataLoader  # noqa: E402
 
 from projector_distortion.cli import add_common_args, resolve_device  # noqa: E402
 from projector_distortion.config import load_config, pick, resolve_path  # noqa: E402
-from projector_distortion.data import index_triplets, torch_dataset  # noqa: E402
+from projector_distortion.data import (  # noqa: E402
+    RESEARCH_DIRS, TripletPatchDataset, index_triplets,
+)
 from projector_distortion.models.restoration import (  # noqa: E402
     add_ablation_args, build_network, config_from_args, count_parameters,
     load_checkpoint, save_checkpoint,
 )
 
 
-# =============================================================================
-# Losses
-# =============================================================================
-
 class HighFrequencyWaveletLoss(nn.Module):
     """
     L1 on the high-frequency Haar sub-bands (LH, HL, HH).
 
-    Targets edges and texture directly, replacing a separate gradient + laplacian pair.
-    pixel_unshuffle + a 1x1 grouped conv make it nearly free.
+    Targets edges and texture directly, replacing a separate gradient + laplacian
+    pair. pixel_unshuffle plus a 1x1 grouped conv makes it nearly free.
     """
 
     def __init__(self, c=3):
@@ -71,7 +68,7 @@ class HighFrequencyWaveletLoss(nn.Module):
         b, _, h, w = p.shape
         p = p.view(b, self.c, 4, h, w)
         t = t.view(b, self.c, 4, h, w)
-        return self.l1(p[:, :, 1:], t[:, :, 1:])       # index 0 is the LL band
+        return self.l1(p[:, :, 1:], t[:, :, 1:])       # band 0 is LL, skip it
 
 
 class PerceptualLoss(nn.Module):
@@ -108,10 +105,6 @@ def _ssim_module(device):
     return pytorch_msssim.SSIM(data_range=2.0, size_average=True, channel=3).to(device)
 
 
-# =============================================================================
-# CLI
-# =============================================================================
-
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -145,31 +138,34 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def _clean_dir(data_root, gt_root):
+def _clean_root(data_root, gt_root):
     """
-    Training needs clean targets. Accept them under data_root (research layout) or
-    under gt_root/clean (the flat sample layout), and hand back a root that works.
+    Directory holding the clean targets.
+
+    They sit either under data_root (research and flat layouts) or under
+    gt_root/clean (the bundled sample set).
     """
-    from projector_distortion.data import RESEARCH_DIRS
-    if os.path.isdir(os.path.join(data_root, RESEARCH_DIRS["clean"])) or \
-            os.path.isdir(os.path.join(data_root, "clean")):
-        return data_root
-    src = os.path.join(gt_root or "", "clean")
-    if os.path.isdir(src):
-        # index_triplets wants one root; expose gt/clean as <data_root>/clean via a
-        # temporary view rather than copying gigabytes.
-        link = os.path.join(data_root, "clean")
-        if not os.path.exists(link):
-            try:
-                os.symlink(src, link, target_is_directory=True)
-                print(f"linked {link} -> {src}")
-            except OSError:
-                raise SystemExit(
-                    f"clean targets live in {src} but {data_root} has no 'clean/'.\n"
-                    f"    copy or link it:  mklink /D \"{link}\" \"{src}\"  (Windows)\n"
-                    f"                      ln -s \"{src}\" \"{link}\"      (POSIX)")
-        return data_root
-    raise SystemExit(f"no clean/ targets found under {data_root} or {src}")
+    candidates = [os.path.join(data_root, RESEARCH_DIRS["clean"]),
+                  os.path.join(data_root, "clean"),
+                  os.path.join(gt_root or "", "clean")]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    raise SystemExit(
+        "no clean/ targets found. training needs the un-projected screen images.\n"
+        + "".join(f"    looked in {p}\n" for p in candidates))
+
+
+def _optimizer_step(net, opt, scaler):
+    if scaler is not None:
+        scaler.unscale_(opt)
+    torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+    if scaler is not None:
+        scaler.step(opt)
+        scaler.update()
+    else:
+        opt.step()
+    opt.zero_grad(set_to_none=True)
 
 
 def main(argv=None):
@@ -188,10 +184,12 @@ def main(argv=None):
     weights = {k: float(v) for k, v in (tcfg.get("loss") or {}).items()}
     weights.setdefault("l1", 1.0)
 
+    # A resumed checkpoint carries its own architecture, and that wins over --no-*.
+    net = None
     cfg = config_from_args(args)
     if args.resume:
-        _, cfg, meta = load_checkpoint(resolve_path(args.resume), device="cpu")
-        print(f"resuming architecture from {args.resume} (cfg via {meta['cfg_source']})")
+        net, cfg, meta = load_checkpoint(resolve_path(args.resume), device=device)
+        print(f"resuming from {args.resume} (cfg via {meta['cfg_source']})")
 
     tag = cfg.tag()
     run = os.path.join(resolve_path(args.out) or args.out,
@@ -206,19 +204,18 @@ def main(argv=None):
     print(f"    run dir {run}")
     print("=" * 74)
 
-    data_root = _clean_dir(resolve_path(args.data_root) or args.data_root,
-                           resolve_path(args.gt))
-    triplets = index_triplets(data_root, sample=args.sample, seed=args.seed)
+    data_root = resolve_path(args.data_root) or args.data_root
+    clean_root = _clean_root(data_root, resolve_path(args.gt))
+    triplets = index_triplets(data_root, clean_root=clean_root,
+                              sample=args.sample, seed=args.seed)
     patch = tuple(pick(None, tcfg, "patch_size", default=[180, 320]))
     big = tuple(pick(None, tcfg, "resize_to", default=[360, 640]))
-    loader = DataLoader(torch_dataset(triplets, small_size=patch, big_size=big),
-                        batch_size=batch_size, shuffle=True, num_workers=workers,
-                        pin_memory=(device == "cuda"))
+    dataset = TripletPatchDataset(triplets, small_size=patch, big_size=big)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
+                        num_workers=workers, pin_memory=(device == "cuda"))
 
-    net = build_network(cfg).to(device)
-    if args.resume:
-        sd, _, _ = load_checkpoint(resolve_path(args.resume), device=device, cfg=cfg)
-        net.load_state_dict(sd.state_dict())
+    if net is None:
+        net = build_network(cfg).to(device)
     print(f"trainable params: {count_parameters(net):,}")
 
     opt = torch.optim.Adam(net.parameters(), lr=lr, betas=(0.5, 0.999))
@@ -272,32 +269,18 @@ def main(argv=None):
 
             steps += 1
             if steps % accum == 0:
-                if use_amp:
-                    scaler.unscale_(opt)
-                torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-                if use_amp:
-                    scaler.step(opt); scaler.update()
-                else:
-                    opt.step()
-                opt.zero_grad(set_to_none=True)
+                _optimizer_step(net, opt, scaler)
 
-            ep["total"].append(float(total))
+            ep["total"].append(float(total.detach()))
             for k, v in parts.items():
-                ep[k].append(float(v))
-            ep["residual"].append(float(residual.abs().mean()))
+                ep[k].append(float(v.detach()))
+            ep["residual"].append(float(residual.detach().abs().mean()))
             if hasattr(loop, "set_postfix"):
                 loop.set_postfix({k: f"{np.mean(ep[k]):.3f}"
                                   for k in ("total", "l1", "perceptual")})
 
         if steps % accum:               # flush a partial accumulation window
-            if use_amp:
-                scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-            if use_amp:
-                scaler.step(opt); scaler.update()
-            else:
-                opt.step()
-            opt.zero_grad(set_to_none=True)
+            _optimizer_step(net, opt, scaler)
 
         row = {"epoch": epoch + 1, **{k: round(float(np.mean(v)), 5)
                                       for k, v in ep.items()}}
@@ -343,11 +326,17 @@ def _write_log(history, run):
         a1.plot(xs, [r["total"] for r in history], label="total", linewidth=2)
         for k in ("l1", "perceptual", "ssim"):
             a1.plot(xs, [r[k] for r in history], label=k, linestyle=":")
-        a1.set_xlabel("epoch"); a1.legend(); a1.grid(True); a1.set_title("losses")
+        a1.set_xlabel("epoch")
+        a1.legend()
+        a1.grid(True)
+        a1.set_title("losses")
         a2.plot(xs, [r["wavelet"] for r in history], label="wavelet HF", color="purple")
         a2.plot(xs, [r["residual"] for r in history], label="mean |residual|",
                 color="green")
-        a2.set_xlabel("epoch"); a2.legend(); a2.grid(True); a2.set_title("auxiliary")
+        a2.set_xlabel("epoch")
+        a2.legend()
+        a2.grid(True)
+        a2.set_title("auxiliary")
         fig.tight_layout()
         fig.savefig(os.path.join(run, "loss_plots.png"))
         plt.close(fig)

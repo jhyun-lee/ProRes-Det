@@ -1,4 +1,3 @@
-# projector_distortion/utils/image.py
 """Image <-> tensor conversion, resizing, and quality metrics."""
 
 from typing import Optional, Tuple
@@ -18,7 +17,7 @@ def read_bgr(path) -> np.ndarray:
 
 
 def resize(img, size: Tuple[int, int]) -> np.ndarray:
-    """size is (width, height). Shrinks with INTER_AREA, grows with INTER_LINEAR."""
+    """`size` is (width, height). Shrinks with INTER_AREA, grows with INTER_LINEAR."""
     if (img.shape[1], img.shape[0]) == tuple(size):
         return img
     shrinking = size[0] * size[1] < img.shape[1] * img.shape[0]
@@ -46,17 +45,13 @@ def tensor_to_bgr(t, size: Optional[Tuple[int, int]] = None) -> np.ndarray:
 def residual_to_bgr(residual, size: Optional[Tuple[int, int]] = None) -> np.ndarray:
     """Mean |residual| across channels as a JET heatmap - what the model removed."""
     mag = residual.detach().float().squeeze(0).abs().mean(0).cpu().numpy()
-    mag = (mag / 2.0 * 255.0).clip(0, 255).astype(np.uint8)   # residual is in [-1,1]
+    mag = (mag / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
     heat = cv2.applyColorMap(mag, cv2.COLORMAP_JET)
     return resize(heat, size) if size is not None else heat
 
 
-# --- quality metrics ----------------------------------------------------------
-# Only meaningful against an un-annotated image; the pipeline keeps clean copies
-# precisely so these stay computable after a run.
-
 def psnr(a: np.ndarray, b: np.ndarray, data_range: float = 255.0) -> float:
-    """Peak signal-to-noise ratio in dB. inf when the images are identical."""
+    """Peak signal-to-noise ratio in dB; inf when the images are identical."""
     a, b = _match(a, b)
     mse = float(np.mean((a.astype(np.float64) - b.astype(np.float64)) ** 2))
     if mse == 0:
@@ -68,7 +63,7 @@ def ssim(a: np.ndarray, b: np.ndarray, data_range: float = 255.0) -> float:
     """
     Mean SSIM over channels, gaussian-windowed (11x11, sigma 1.5).
 
-    Self-contained so metrics do not drag in scikit-image or pytorch-msssim.
+    Self-contained so metrics never drag in scikit-image or pytorch-msssim.
     """
     a, b = _match(a, b)
     a = a.astype(np.float64)
@@ -94,7 +89,7 @@ def ssim(a: np.ndarray, b: np.ndarray, data_range: float = 255.0) -> float:
 
 
 def _match(a, b):
-    """Resize b onto a when they differ, so metrics never silently compare mismatches."""
+    """Resize b onto a, so a metric never silently compares mismatched sizes."""
     if a.shape[:2] != b.shape[:2]:
         b = resize(b, (a.shape[1], a.shape[0]))
     if a.ndim != b.ndim:

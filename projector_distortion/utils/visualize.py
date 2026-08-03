@@ -1,7 +1,4 @@
-# projector_distortion/utils/visualize.py
 """Box drawing, captions, and the before/after comparison layouts."""
-
-from typing import Sequence
 
 import cv2
 import numpy as np
@@ -16,7 +13,7 @@ _CORNER_COLORS = ((0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 128, 0))
 
 def draw_detections(img, detections, color=BOX_COLOR, text_color=TEXT_COLOR,
                     thickness=2) -> np.ndarray:
-    """Draw in place and return the image. Pass a copy to keep a clean original."""
+    """Draws in place and returns the image; pass a copy to keep a clean original."""
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.box)
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
@@ -26,7 +23,6 @@ def draw_detections(img, detections, color=BOX_COLOR, text_color=TEXT_COLOR,
 
 
 def draw_ground_truth(img, boxes, names=None, color=GT_COLOR) -> np.ndarray:
-    """Dashed-looking GT boxes in a distinct colour, for evaluate.py overlays."""
     for i, box in enumerate(boxes):
         x1, y1, x2, y2 = (int(v) for v in box)
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 1)
@@ -46,7 +42,6 @@ def caption(img, text, org=(8, 22), scale=0.6) -> np.ndarray:
 
 
 def side_by_side(left, right, left_label="before", right_label="after") -> np.ndarray:
-    """Horizontal before/after pair with captions."""
     if left.shape[:2] != right.shape[:2]:
         right = cv2.resize(right, (left.shape[1], left.shape[0]))
     return cv2.hconcat([caption(left.copy(), left_label),
@@ -54,11 +49,7 @@ def side_by_side(left, right, left_label="before", right_label="after") -> np.nd
 
 
 def grid_2x2(top_left, top_right, bottom_left, bottom_right, labels=None) -> np.ndarray:
-    """
-    2x2 comparison panel. All four tiles are resized onto the first one.
-
-    Default use: beam | captured+det / restored+det | residual heatmap.
-    """
+    """2x2 comparison panel; all four tiles are resized onto the first one."""
     h, w = top_left.shape[:2]
     tiles = []
     for i, img in enumerate((top_left, top_right, bottom_left, bottom_right)):
@@ -74,7 +65,7 @@ def draw_quad(frame, points, title=None, thickness=2) -> np.ndarray:
     """
     Calibration quad on a copy of `frame`, one colour per corner plus coordinates.
 
-    Drawn on the *raw* pre-warp camera view, which is what makes a mis-ordered or
+    Drawn on the raw pre-warp camera view, which is what makes a mis-ordered or
     drifted calibration obvious at a glance.
     """
     canvas = frame.copy()

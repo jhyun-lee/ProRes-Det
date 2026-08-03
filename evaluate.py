@@ -14,8 +14,8 @@ Reports, for the captured (distorted) image and the restored one:
     restoration PSNR and SSIM against the clean ground truth
 
 mAP here is the single-IoU-threshold average precision over classes (VOC-style area
-under the interpolated PR curve), computed from this run's detections only - it is not
-COCO's averaged-over-IoU metric.
+under the interpolated PR curve), computed from this run's detections only - it is
+not COCO's averaged-over-IoU metric.
 """
 
 import argparse
@@ -56,13 +56,12 @@ def build_parser():
     return p
 
 
-# --- metrics ------------------------------------------------------------------
-
 def match_detections(dets, gt, iou_thr):
     """
-    Greedy highest-confidence-first matching within a class.
+    Greedy highest-confidence-first matching within one class.
 
-    Returns (tp_flags aligned with the confidence-sorted dets, n_gt).
+    Returns (tp_flags, n_gt, confs, cls_ids), all aligned with the
+    confidence-sorted order of `dets`.
     """
     order = sorted(range(len(dets)), key=lambda i: -dets[i].conf)
     used = [False] * len(gt)
@@ -94,8 +93,7 @@ def average_precision(tp_flags, confs, n_gt):
     tp_c, fp_c = np.cumsum(tp), np.cumsum(fp)
     recall = tp_c / n_gt
     precision = tp_c / np.maximum(tp_c + fp_c, 1e-12)
-    # make precision monotonically decreasing, then integrate over recall
-    for i in range(len(precision) - 2, -1, -1):
+    for i in range(len(precision) - 2, -1, -1):     # make precision monotonic
         precision[i] = max(precision[i], precision[i + 1])
     r = np.concatenate([[0.0], recall])
     p = np.concatenate([[precision[0] if len(precision) else 0.0], precision])
@@ -161,14 +159,13 @@ class Scorer:
         return overall, rows
 
 
-# --- main ---------------------------------------------------------------------
-
-def evaluate_one(backend, args, out_dir):
+def evaluate_one(backend, args, out_dir, det_weights):
     """Score a single detector backend; returns the result dict."""
     args.detector = backend
-    args.det_weights = None if backend != args.detector else args.det_weights
+    args.det_weights = det_weights
+
     restorer, detector, info = build_models(args, need_detector=True)
-    filt = box_filter_kwargs(args, info["detection_config"])
+    box_filter = box_filter_kwargs(args, info["detection_config"])
     class_names = detector.class_names
 
     samples = find_samples(resolve_path(args.input), gt_root=resolve_path(args.gt),
@@ -191,7 +188,7 @@ def evaluate_one(backend, args, out_dir):
         pass
 
     for i, sample in iterator:
-        r = process_sample(sample, restorer, detector, frame_id=i, **filt)
+        r = process_sample(sample, restorer, detector, frame_id=i, **box_filter)
         sc_cap.add(r.det_captured, r.gt_boxes, args.iou)
         sc_res.add(r.det_restored, r.gt_boxes, args.iou)
         m = r.metrics()
@@ -203,14 +200,14 @@ def evaluate_one(backend, args, out_dir):
 
     cap_overall, cap_rows = sc_cap.report()
     res_overall, res_rows = sc_res.report()
-    q = {k: round(float(np.mean([x[k] for x in quality])), 4) for k in quality[0]} \
-        if quality else {}
+    q = ({k: round(float(np.mean([x[k] for x in quality])), 4) for k in quality[0]}
+         if quality else {})
 
     result = {
         "detector": detector.info(),
         "restorer": restorer.info(),
         "iou_threshold": args.iou,
-        "box_filter": filt,
+        "box_filter": box_filter,
         "images_scored": len(scored),
         "detection": {"captured": cap_overall, "restored": res_overall},
         "detection_per_class": {"captured": cap_rows, "restored": res_rows},
@@ -225,19 +222,39 @@ def evaluate_one(backend, args, out_dir):
         result["restoration"]["ssim_gain"] = round(
             q["ssim_restored"] - q["ssim_captured"], 5)
 
-    with open(os.path.join(out_dir, f"per_image_{backend}.csv"), "w", newline="",
-              encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+    _write_csv(os.path.join(out_dir, f"per_image_{backend}.csv"),
+               list(rows[0]), rows)
+    _write_csv(os.path.join(out_dir, f"per_class_{backend}.csv"),
+               ["source"] + list(cap_rows[0]),
+               [{"source": src, **r} for src, rs in (("captured", cap_rows),
+                                                     ("restored", res_rows))
+                for r in rs])
+    return result
+
+
+def _write_csv(path, fieldnames, rows):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(rows)
-    with open(os.path.join(out_dir, f"per_class_{backend}.csv"), "w", newline="",
-              encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["source"] + list(cap_rows[0]))
-        w.writeheader()
-        for src, rs in (("captured", cap_rows), ("restored", res_rows)):
-            for r in rs:
-                w.writerow({"source": src, **r})
-    return result
+
+
+def _weights_per_backend(backends, named, explicit):
+    """
+    --det-weights names one checkpoint, so it can apply to at most one backend.
+
+    Others fall back to configs/detection.yaml; otherwise comparing yolo against
+    ssd would load one backend's checkpoint into the other.
+    """
+    if not explicit:
+        return {b: None for b in backends}
+    if len(backends) == 1:
+        return {backends[0]: explicit}
+    if named in backends:
+        return {b: (explicit if b == named else None) for b in backends}
+    print(f"warning: --det-weights is ambiguous across {backends}; ignoring it. "
+          f"Add --detector <backend> to say which one it belongs to.")
+    return {b: None for b in backends}
 
 
 def main(argv=None):
@@ -245,11 +262,12 @@ def main(argv=None):
     out_dir = run_dir(args.output, args.name or "eval")
     backends = [b.strip() for b in (args.detectors or args.detector or "yolo").split(",")
                 if b.strip()]
+    weights = _weights_per_backend(backends, args.detector, args.det_weights)
 
     results = {}
     for backend in backends:
         print(f"\n{'=' * 70}\n{backend}\n{'=' * 70}")
-        results[backend] = evaluate_one(backend, args, out_dir)
+        results[backend] = evaluate_one(backend, args, out_dir, weights[backend])
 
     with open(os.path.join(out_dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False, default=str)

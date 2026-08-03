@@ -1,4 +1,3 @@
-# projector_distortion/pipeline/offline.py
 """
 Offline pipeline: restore + detect over image pairs on disk. No hardware needed.
 
@@ -21,7 +20,7 @@ import numpy as np
 from ..data import Sample, find_samples, load_yolo_labels
 from ..models import filter_detections
 from ..utils.image import psnr, read_bgr, resize, ssim
-from ..utils.visualize import caption, draw_detections, grid_2x2
+from ..utils.visualize import draw_detections, grid_2x2
 
 
 @dataclass
@@ -31,17 +30,17 @@ class FrameResult:
     frame_id: int
     name_id: str
     beam: np.ndarray
-    captured: np.ndarray            # clean
-    captured_det: np.ndarray        # annotated
-    restored: np.ndarray            # clean
-    restored_det: np.ndarray        # annotated
+    captured: np.ndarray
+    captured_det: np.ndarray
+    restored: np.ndarray
+    restored_det: np.ndarray
     residual: np.ndarray
     residual_mean: float = 0.0
     det_captured: List = field(default_factory=list)
     det_restored: List = field(default_factory=list)
     t_restore: float = 0.0
     t_detect: float = 0.0
-    clean: Optional[np.ndarray] = None      # ground truth image, when available
+    clean: Optional[np.ndarray] = None
     gt_boxes: List = field(default_factory=list)
 
     def metrics(self) -> Dict[str, Optional[float]]:
@@ -59,7 +58,8 @@ class FrameResult:
 
 
 def process_sample(sample: Sample, restorer, detector, frame_id=0,
-                   best_per_class=False, min_area=500, with_gt=True) -> FrameResult:
+                   best_per_class=False, min_area=500, min_width=20, min_height=20,
+                   with_gt=True) -> FrameResult:
     """Run one (pro, beam) pair end to end."""
     pro = read_bgr(sample.pro)
     beam = read_bgr(sample.beam)
@@ -76,9 +76,10 @@ def process_sample(sample: Sample, restorer, detector, frame_id=0,
     raw_restored = detector(restored_clean)
     t_detect = time.perf_counter() - t1
 
-    kw = dict(min_area=min_area, best_per_class=best_per_class)
-    det_c = filter_detections(raw_captured, **kw)
-    det_r = filter_detections(raw_restored, **kw)
+    gate = dict(min_area=min_area, min_width=min_width, min_height=min_height,
+                best_per_class=best_per_class)
+    det_c = filter_detections(raw_captured, **gate)
+    det_r = filter_detections(raw_restored, **gate)
 
     captured_det = draw_detections(captured_clean.copy(), det_c)
     restored_det = draw_detections(restored_clean.copy(), det_r)
@@ -114,13 +115,9 @@ def build_panel(result: FrameResult, detector_name="detector") -> np.ndarray:
 
 
 def run_offline(input_root, restorer, detector, recorder, gt_root=None, limit=0,
-                best_per_class=False, min_area=500, detector_name="detector",
-                progress=True) -> Dict:
-    """
-    Process every discovered pair, writing through `recorder`.
-
-    Returns a summary dict which the caller usually merges into run_meta.json.
-    """
+                best_per_class=False, min_area=500, min_width=20, min_height=20,
+                detector_name="detector", progress=True) -> Dict:
+    """Process every discovered pair through `recorder`; returns a summary dict."""
     samples = find_samples(input_root, gt_root=gt_root, limit=limit)
     n_gt = sum(1 for s in samples if s.clean)
     print(f"found {len(samples)} pro/beam pair(s); {n_gt} have clean ground truth")
@@ -140,7 +137,8 @@ def run_offline(input_root, restorer, detector, recorder, gt_root=None, limit=0,
 
     for i, sample in iterator:
         result = process_sample(sample, restorer, detector, frame_id=i,
-                                best_per_class=best_per_class, min_area=min_area)
+                                best_per_class=best_per_class, min_area=min_area,
+                                min_width=min_width, min_height=min_height)
         m = result.metrics()
         panel = build_panel(result, detector_name)
 
@@ -174,13 +172,14 @@ def run_offline(input_root, restorer, detector, recorder, gt_root=None, limit=0,
         delta = (totals["restored"] - totals["captured"]) / totals["captured"] * 100
         summary["detection_delta_pct"] = round(delta, 1)
     if metric_rows:
-        summary["quality"] = {
+        quality = {
             key: round(float(np.mean([r[key] for r in metric_rows])), 4)
             for key in ("psnr_captured", "psnr_restored",
                         "ssim_captured", "ssim_restored")
         }
-        summary["quality"]["psnr_gain_db"] = round(
-            summary["quality"]["psnr_restored"] - summary["quality"]["psnr_captured"], 4)
-        summary["quality"]["ssim_gain"] = round(
-            summary["quality"]["ssim_restored"] - summary["quality"]["ssim_captured"], 5)
+        quality["psnr_gain_db"] = round(
+            quality["psnr_restored"] - quality["psnr_captured"], 4)
+        quality["ssim_gain"] = round(
+            quality["ssim_restored"] - quality["ssim_captured"], 5)
+        summary["quality"] = quality
     return summary

@@ -1,22 +1,16 @@
 """
-projector-distortion-framework
-==============================
-
-Remove projector light from a camera capture, then compare object detection before and
-after restoration.
+Remove projector light from a camera capture, then compare object detection
+before and after restoration.
 
     from projector_distortion import build_restorer, build_detector
-    from projector_distortion.pipeline import process_sample
     from projector_distortion.data import find_samples
+    from projector_distortion.pipeline import process_sample
 
     restorer = build_restorer("weights/restorer_restormerlike.pt")
     detector = build_detector("ssd", "weights/detector_ssdlite.pth")
     for i, s in enumerate(find_samples("data/sample_input", "data/sample_gt")):
         r = process_sample(s, restorer, detector, frame_id=i)
-        print(s.name_id, len(r.det_captured), "->", len(r.det_restored), r.metrics())
-
-Restoration and detection are both swappable behind `BaseRestorer` / `BaseDetector`;
-see `models/base.py`.
+        print(s.name_id, len(r.det_captured), "->", len(r.det_restored))
 """
 
 __version__ = "0.1.0"
