@@ -1,12 +1,12 @@
 # ProRes-Det
 
-**Pro**jector **Res**toration + **Det**ection · [한국어](README.ko.md)
+**Pro**jector **Res**toration + **Det**ection
 
 Point a camera at a screen while a projector is throwing light on it and the original
-content is wrecked. This framework **removes the projected light (restore)** and
-**measures object detection before and after** that restoration.
+content is wrecked. This framework removes the projected light (restore) and
+measures object detection before and after that restoration.
 
-Both the restoration model and the detector are **swappable** behind two small
+Both the restoration model and the detector are swappable behind two small
 interfaces.
 
 ```
@@ -35,12 +35,12 @@ pip install -e ".[test]"        # + pytest
 pip install -e ".[all]"         # everything
 ```
 
-> Square brackets are glob characters in some shells (zsh). **Quoting makes it work
-> in bash / zsh / PowerShell / cmd alike.**
+> Square brackets are glob characters in some shells (zsh). Quoting makes it work
+> in bash / zsh / PowerShell / cmd alike.
 
 Base dependencies are `torch torchvision opencv-python numpy PyYAML tqdm`.
 
-Optional dependencies are imported **inside the function that uses them**, not at the
+Optional dependencies are imported inside the function that uses them, not at the
 top of a module. `--detector ssd` works without `ultralytics` installed, and skipping
 `--live` means `screeninfo` and the Win32 plumbing never load.
 
@@ -65,9 +65,10 @@ ProRes-Det/
 │   ├── pipeline/             offline / live run loops
 │   └── utils/                image, visualization and recording helpers
 │
+├── docs/                     README_running.md — per-script options, in/out
 ├── tests/                    pytest suite
-├── weights/                  3 checkpoints → weights/README.md
-├── data/                     sample dataset → data/README.md
+├── weights/                  3 checkpoints, not in git → README_weights.md
+├── data/                     sample dataset → README_data.md
 └── output/                   run artefacts
 ```
 
@@ -81,7 +82,7 @@ ProRes-Det/
 | [cli.py](projector_distortion/cli.py) | Args, config precedence and model construction shared by all three entry points |
 | [config.py](projector_distortion/config.py) | YAML load/merge, path resolution against the project root |
 | [data.py](projector_distortion/data.py) | Pairs pro/beam/clean/label by filename, and provides the training patch dataset |
-| [models/base.py](projector_distortion/models/base.py) | `BaseRestorer` · `BaseDetector` · `Detection` · detector registry — **the extension point** |
+| [models/base.py](projector_distortion/models/base.py) | `BaseRestorer` · `BaseDetector` · `Detection` · detector registry — the extension point |
 | [models/restoration.py](projector_distortion/models/restoration.py) | Restoration network (3-level U-Net), structural config, checkpoint I/O, pipeline wrapper |
 | [models/detection.py](projector_distortion/models/detection.py) | yolo (ultralytics) and ssd (torchvision) wrappers, box size filter |
 | [pipeline/offline.py](projector_distortion/pipeline/offline.py) | Batch over image pairs on disk. No hardware needed |
@@ -92,7 +93,9 @@ ProRes-Det/
 
 ### Bundled dataset
 
-Sample data ships with the repo so every command runs with no arguments.
+The sample data below is tracked in git, so it is there right after a clone.
+**The checkpoints under `weights/` are not** — `.gitignore` excludes `*.pt` / `*.pth`.
+Supply them before the first run, see [weights/README_weights.md](weights/README_weights.md).
 
 | Path | Contents | Used as |
 |---|---|---|
@@ -104,22 +107,36 @@ Sample data ships with the repo so every command runs with no arguments.
 | [data/live/BaseBackGround.jpg](data/live/BaseBackGround.jpg) | Background shown during calibration | `--live` input |
 
 The filename convention that pairs `pro` ↔ `beam` ↔ `clean`, and how to swap in real
-data, are in [data/README.md](data/README.md); checkpoint details are in
-[weights/README.md](weights/README.md).
+data, are in [data/README_data.md](data/README_data.md); checkpoint details are in
+[weights/README_weights.md](weights/README_weights.md).
 
 ---
 
 ## 3. Running
 
-### 3.1 Quick start
-
 ```bash
-python demo.py        # restore + detect 22 bundled pairs → output/<timestamp>/
-python evaluate.py    # before/after mAP + PSNR/SSIM table → output/eval/
+python demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
+python evaluate.py                # before/after mAP + PSNR/SSIM table → output/eval/
+python train.py --epochs 30       # retrain the restorer            → runs/<tag>/
+python demo.py --live --screen 2  # webcam + projector rig          → output/<timestamp>/
 ```
 
-Runs with no arguments. The three below only change the model; input and output paths
-are unchanged.
+The first two need no arguments once the checkpoints are in `weights/`.
+
+`--live` needs real hardware: a webcam pointed at a screen the projector is throwing to.
+`--screen N` is the index of the monitor the projector is connected to — the
+framework opens a borderless fullscreen window there and plays the clip through it,
+while the webcam records the result. `0` is always the primary display, so a projector
+attached as a second display is usually `1` or `2`. If you do not know it, pass anything:
+the detected monitor table is printed before anything else.
+
+```
+2 monitor(s) detected:
+      --screen 0 -> 2560x1440 at (0,0) (primary)  \\.\DISPLAY1
+      --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
+```
+
+Swapping the model leaves input and output paths unchanged:
 
 ```bash
 python demo.py --detector ssd     # swap the detector (no ultralytics needed)
@@ -127,133 +144,7 @@ python demo.py --detector none    # restoration only, skip detection
 python demo.py --limit 5          # first 5 pairs only
 ```
 
-### 3.2 `demo.py` — restore → detect
-
-| | Default path | Option to change it |
-|---|---|---|
-| **Input** | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
-| **GT** (optional) | `data/sample_gt/` (`clean/` + `labels/`) | `--gt <dir>` |
-| **Output** | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
-
-Without GT only PSNR/SSIM is skipped; the run continues.
-
-| Option | Meaning |
-|---|---|
-| `--detector yolo\|ssd\|none` | Detection backend (default yolo) |
-| `--conf <float>` | Detector confidence floor (default 0.25) |
-| `--limit N` | Cap how many pairs are processed (0 = all) |
-| `--save-every N` | Image save interval. `0` keeps csv only |
-| `--save-kinds a,b` | Save only selected image kinds (`captured,restored,panel`, …) |
-| `--video` | Also write the 2×2 panels as `result.mp4` |
-
-### 3.3 `evaluate.py` — score before vs after
-
-Only samples that have **both** `clean` and `label` are scored.
-
-| | Default path | Option to change it |
-|---|---|---|
-| **Input** | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
-| **GT** | `data/sample_gt/` (`clean/` + `labels/`) | `--gt <dir>` |
-| **Output** | `output/eval/`<br>`report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv` | `--output <dir>` · `--name <name>` |
-
-| Option | Meaning |
-|---|---|
-| `--detectors yolo,ssd` | Compare several backends in one run (one row each) |
-| `--iou <float>` | IoU threshold for a true positive (default 0.5) |
-| `--limit N` | Cap how many pairs are scored |
-
-```bash
-python evaluate.py --detectors yolo,ssd --iou 0.5
-```
-
-A summary table is printed; per-class P / R / F1 / AP goes into the csv.
-
-```python
-import pandas as pd
-pc = pd.read_csv("output/eval/per_class_yolo.csv")
-pc.pivot_table(index="name", columns="source", values="ap")   # per-class AP shift
-```
-
-### 3.4 `train.py` — retrain the restoration model
-
-Only complete `pro` / `beam` / `clean` triplets are used.
-
-| | Default path | Option to change it |
-|---|---|---|
-| **Input** | `data/sample_input/` (`pro/` + `beam/`) | `--data-root <dir>` |
-| **Target** | `data/sample_gt/clean/` — **required** | `--gt <dir>` |
-| **Output** | `runs/<MMDD_HHMM>_<epochs>ep_<tag>/`<br>`restorer_<tag>_best.pt`, `epoch_N.pt`, `loss_log.csv`, `loss_plots.png` | `--out <dir>` |
-
-| Option | Meaning |
-|---|---|
-| `--epochs N` `--batch-size N` `--lr F` | Defaults come from `configs/restoration.yaml` |
-| `--sample N` | Cap how many triplets are used |
-| `--resume <ckpt>` | Continue from a checkpoint |
-| `--no-ca` and 9 more | Ablation. Whatever is switched off lands in `tag` (`NoCA`, `NoCA-NoSkip3`, …) |
-
-```bash
-python train.py --epochs 30
-python train.py --data-root /path/to/dataset --epochs 30
-python train.py --no-ca --epochs 30
-```
-
-Checkpoints embed their own architecture config, so the flags never need repeating.
-
-```bash
-python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
-```
-
-### 3.5 `demo.py --live` — webcam + projector
-
-| | Default | Option to change it |
-|---|---|---|
-| **Projected clip** | `data/live/BeamVideo.mp4` | `--clip <path>` |
-| **Calibration background** | `data/live/BaseBackGround.jpg` | `--background <path>` |
-| **Camera** | webcam 0 | `--camera N` · `--cam-width/height/fps` · `--cam-backend` |
-| **Output** | `output/<timestamp>/` + `calib/` + `result.mp4` | `--output <dir>` · `--name <name>` |
-
-| Option | Meaning |
-|---|---|
-| `--screen N` | Monitor index the projector is attached to (0 = primary) |
-| `--offset N` | Projector→camera latency in frames (default 6) |
-| `--manual-calib` | Click the 4 corners instead of auto-detecting them |
-| `--debug-view` | Show the pre-warp camera feed with the quad, live |
-| `--max-frames N` | 0 = until the clip ends |
-
-```bash
-python demo.py --live --screen 2
-python demo.py --live --screen 2 --save-every 30 --debug-view
-```
-
-If you do not know `--screen`, pass anything and run — the detected monitor table is
-printed first.
-
-Sequence: black/white flash → 4 corners auto-detected from the difference image →
-homography computed once → every frame warped with it. Auto-detection falls back to
-manual clicking on failure. If the result looks wrong, check `--debug-view` and the
-intermediate images in `output/*/calib/` (`mask.jpg`, `diff.jpg`, `warped.jpg`).
-
-### 3.6 Output format
-
-```
-output/<run_name>/
-├── run_meta.json      config · environment · calibration · summary (all in one file)
-├── detections.csv     one row per box, `source` separates captured / restored
-├── frames.csv         one row per frame (PSNR/SSIM/latency included)
-├── frames/            sampled images, --save-every apart
-│   ├── <id>_captured.jpg      before restoration (no boxes)
-│   ├── <id>_restored.jpg      after restoration (no boxes)  ← metric input
-│   ├── <id>_*_det.jpg         the annotated versions
-│   ├── <id>_residual.jpg      heatmap of the removed light
-│   └── <id>_panel.jpg         2×2 comparison panel
-├── calib/             calibration evidence (--live only)
-└── result.mp4         video of the 2×2 panels (--live or --video)
-```
-
-**Keeping clean and annotated images separate** is the point. It is what makes
-recomputing PSNR/SSIM and re-running a different detector possible after the fact.
-
-`evaluate.py` writes `report.json` + `per_class_*.csv` + `per_image_*.csv` instead.
+Input, output and the full option list for each script → [docs/README_running.md](docs/README_running.md).
 
 ---
 
@@ -268,8 +159,8 @@ configs/*.yaml  <  YAML passed via --restoration-config / --detection-config  < 
 | [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | Restoration weights path, input size, structural toggles, training hyperparameters and loss weights |
 | [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Detection backend, per-backend weights paths, conf threshold, box size filter, the 17 class names |
 
-Relative paths inside a config resolve **against the project root, not the working
-directory**, so `python demo.py` works from anywhere.
+Relative paths inside a config resolve against the project root, not the working
+directory, so `python demo.py` works from anywhere.
 
 To override only part of it, pass a YAML with just the keys you want changed — it is
 merged recursively.
@@ -316,73 +207,24 @@ Subclass `BaseRestorer` and implement
 `restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)`. That is the whole
 interface.
 
+The shipped network predicts the residual to subtract, not the clean image:
+
 ```
 input   (B, 6, H, W) = cat([pro, beam])  in [-1, 1]
 output  (B, 3, H, W) = residual
 restored = (pro - residual).clamp(-1, 1)
 ```
 
-#### Why predict the residual instead of the clean image
-
-The network never draws the restored image. It only emits the light to subtract
-from `pro`.
-
-**1) Preserving the original becomes the default.**
-Where no projector light lands, residual ≈ 0 is enough and the `pro` pixel passes
-through untouched. "Do nothing" is the identity, so the network only has to learn
-**what must change**. Regressing clean directly forces it to regenerate perfectly good
-background too, which smears regions that should have been left alone.
-
-**2) It blocks the "paint the objects in" overfit.**
-If the network outputs clean directly, the fastest way to drive the loss down is to
-largely ignore the input and **reproduce a screen memorised from the training set**.
-This dataset makes that especially tempting: 10 clean images back 22 `pro` captures,
-so clean repeats and memorising the target per `oriId` pays off. A model trained that
-way **makes the detector see objects that were never there**, which destroys the whole
-point of the evaluation. The `restored = pro − residual` structure forces the output to
-**always derive from real camera pixels**, closing that shortcut.
-
-**3) Values cannot blow up.**
-The output `tanh` bounds residual to [-1, 1], and `clamp(-1, 1)` bounds the result
-after the subtraction — two layers of range control. (`--no-tanh` removes the first one;
-that is one of the ablation switches.)
-
-#### How it is enforced — the loss is on `restored`, not on the residual
-
-The key is that **the subtraction lives inside the graph**. The residual is never given
-a target of its own; only the subtracted result is compared against clean. What to
-subtract is left for the network to discover.
-
-```python
-residual = net(torch.cat([pro, beam], dim=1))     # network output
-restored = (pro - residual).clamp(-1, 1)          # subtraction inside the graph
-loss = (0.93 * L1(restored, clean)
-      + 2.04 * Perceptual(restored, clean)
-      + 0.53 * (1 - SSIM(restored, clean))
-      + 0.90 * WaveletHF(restored, clean))        # all four measure `restored`
-```
-
-| Loss term | What it measures | What it penalises |
-|---|---|---|
-| `L1` | Absolute pixel error | Global colour / brightness drift |
-| `Perceptual` (VGG19 relu3_3) | Feature-map distance | Pixel-close results whose structure is broken |
-| `1 − SSIM` | Local luminance, contrast, structure | Flat output that only matched the mean |
-| `WaveletHF` (Haar LH/HL/HH, **LL excluded**) | Edges and texture only | Blurring everything to lower the loss |
-
-Dropping the low-frequency (LL) band is the point of `WaveletHF`. Blurring the whole
-image still lowers L1, but not the high-frequency term. That is what makes the residual
-follow the actual boundaries of the projected light.
-
-The weights live under `train.loss` in
-[configs/restoration.yaml](projector_distortion/configs/restoration.yaml) and come from
-an Optuna sweep on this dataset. Implementation: [train.py](train.py).
-
-> The interface itself will accept a restorer that emits clean directly. In that case
-> the `residual` visualisation and the `residual_mean` metric lose their meaning, and
-> both advantages above are gone.
+That convention keeps the original pixels intact by default and blocks the model from
+hallucinating objects it memorised during training. Why it matters and how the loss
+enforces it → [weights/README_weights.md](weights/README_weights.md#the-residual-convention).
 
 ---
 
 ## 6. License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+[한국어](README.ko.md)
