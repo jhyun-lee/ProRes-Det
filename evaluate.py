@@ -8,7 +8,7 @@ Score detection and restoration before vs after, against data/sample_gt.
     python evaluate.py --detectors yolo,ssd            # one row per backend
     python evaluate.py --iou 0.75 --output output/eval
 
-Reports, for the captured (distorted) image and the restored one:
+Reports, for the distorted image and the restored one:
 
     detection   precision / recall / F1 / mAP@IoU, per class and overall
     restoration PSNR and SSIM against the clean ground truth
@@ -189,12 +189,12 @@ def evaluate_one(backend, args, out_dir, det_weights):
 
     for i, sample in iterator:
         r = process_sample(sample, restorer, detector, frame_id=i, **box_filter)
-        sc_cap.add(r.det_captured, r.gt_boxes, args.iou)
+        sc_cap.add(r.det_distorted, r.gt_boxes, args.iou)
         sc_res.add(r.det_restored, r.gt_boxes, args.iou)
         m = r.metrics()
         quality.append(m)
         rows.append({"name_id": r.name_id, "n_gt": len(r.gt_boxes),
-                     "n_captured": len(r.det_captured),
+                     "n_distorted": len(r.det_distorted),
                      "n_restored": len(r.det_restored),
                      **{k: (None if v is None else round(v, 4)) for k, v in m.items()}})
 
@@ -209,8 +209,8 @@ def evaluate_one(backend, args, out_dir, det_weights):
         "iou_threshold": args.iou,
         "box_filter": box_filter,
         "images_scored": len(scored),
-        "detection": {"captured": cap_overall, "restored": res_overall},
-        "detection_per_class": {"captured": cap_rows, "restored": res_rows},
+        "detection": {"distorted": cap_overall, "restored": res_overall},
+        "detection_per_class": {"distorted": cap_rows, "restored": res_rows},
         "restoration": q,
     }
     if cap_overall["mAP"] is not None and res_overall["mAP"] is not None:
@@ -218,15 +218,15 @@ def evaluate_one(backend, args, out_dir, det_weights):
             res_overall["mAP"] - cap_overall["mAP"], 4)
     if q:
         result["restoration"]["psnr_gain_db"] = round(
-            q["psnr_restored"] - q["psnr_captured"], 4)
+            q["psnr_restored"] - q["psnr_distorted"], 4)
         result["restoration"]["ssim_gain"] = round(
-            q["ssim_restored"] - q["ssim_captured"], 5)
+            q["ssim_restored"] - q["ssim_distorted"], 5)
 
     _write_csv(os.path.join(out_dir, f"per_image_{backend}.csv"),
                list(rows[0]), rows)
     _write_csv(os.path.join(out_dir, f"per_class_{backend}.csv"),
                ["source"] + list(cap_rows[0]),
-               [{"source": src, **r} for src, rs in (("captured", cap_rows),
+               [{"source": src, **r} for src, rs in (("distorted", cap_rows),
                                                      ("restored", res_rows))
                 for r in rs])
     return result
@@ -257,9 +257,28 @@ def _weights_per_backend(backends, named, explicit):
     return {b: None for b in backends}
 
 
+def _eval_dir_name(input_root):
+    """`data/sample_input` -> `Eval_sample_input`, so a report is named by its dataset."""
+    return "Eval_" + os.path.basename(os.path.normpath(str(input_root)))
+
+
+def _clear_stale_reports(out_dir):
+    """
+    Drop per-backend csvs left by an earlier run of the same dataset.
+
+    Without this, scoring yolo and later ssd into the same folder leaves
+    `per_class_yolo.csv` behind while report.json only mentions ssd.
+    """
+    for name in os.listdir(out_dir):
+        if name.startswith(("per_class_", "per_image_")) and name.endswith(".csv"):
+            os.remove(os.path.join(out_dir, name))
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    out_dir = run_dir(args.output, args.name or "eval")
+    input_root = resolve_path(args.input) or args.input
+    out_dir = run_dir(args.output, args.name or _eval_dir_name(input_root))
+    _clear_stale_reports(out_dir)
     backends = [b.strip() for b in (args.detectors or args.detector or "yolo").split(",")
                 if b.strip()]
     weights = _weights_per_backend(backends, args.detector, args.det_weights)
@@ -279,14 +298,14 @@ def main(argv=None):
 
 def _print_table(results):
     print("\n" + "=" * 78)
-    print("detection (captured = before restoration, restored = after)")
+    print("detection (distorted = before restoration, restored = after)")
     print("=" * 78)
     hdr = f"{'backend':10s} {'source':10s} {'P':>7s} {'R':>7s} {'F1':>7s} {'mAP':>7s} " \
           f"{'TP':>5s} {'FP':>5s} {'FN':>5s}"
     print(hdr)
     print("-" * len(hdr))
     for backend, r in results.items():
-        for src in ("captured", "restored"):
+        for src in ("distorted", "restored"):
             d = r["detection"][src]
             m = "  n/a" if d["mAP"] is None else f"{d['mAP']:.4f}"
             print(f"{backend:10s} {src:10s} {d['precision']:7.4f} {d['recall']:7.4f} "
@@ -300,10 +319,10 @@ def _print_table(results):
         print("\n" + "=" * 78)
         print("restoration quality vs clean ground truth")
         print("=" * 78)
-        print(f"  PSNR  captured {q['psnr_captured']:7.3f} dB -> "
+        print(f"  PSNR  distorted {q['psnr_distorted']:7.3f} dB -> "
               f"restored {q['psnr_restored']:7.3f} dB   "
               f"gain {q.get('psnr_gain_db', 0):+.3f}")
-        print(f"  SSIM  captured {q['ssim_captured']:7.4f}    -> "
+        print(f"  SSIM  distorted {q['ssim_distorted']:7.4f}    -> "
               f"restored {q['ssim_restored']:7.4f}      "
               f"gain {q.get('ssim_gain', 0):+.4f}")
 

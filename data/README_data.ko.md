@@ -7,6 +7,7 @@
 
 ```
 data/
+├── collect.py              프로젝터+웹캠으로 직접 데이터셋 수집
 ├── sample_input/           demo.py / evaluate.py / train.py 입력
 │   ├── pro/    projected_<oriId>_<beamId>.jpg   22장, 640×360
 │   └── beam/   output_video_<beamId>.jpg        22장, 크기 혼재
@@ -85,6 +86,60 @@ YOLO 표준 — 한 줄에 박스 하나, `<cls_id> <cx> <cy> <w> <h>`, 전부 0
 순서를 따른다 — 과일 11종(Apple … Watermelon) 다음 동물 6종(Cat … Snake).
 번들 라벨에는 17개 클래스가 모두 등장한다.
 
+## 직접 수집하기 — `collect.py`
+
+위 샘플셋도 이렇게 만들었다. 4단계이고, `check` 와 `capture` 는 리그가 필요하지만
+`beam` 과 `warp` 는 파일 작업뿐이다.
+
+```bash
+python data/collect.py check                                     # 모니터 + 웹캠 확인
+python data/collect.py beam    --src data/live/BeamVideo.mp4     # 영상 -> beam 프레임
+python data/collect.py capture --screen 2 --rounds 3             # 투사하고 촬영
+python data/collect.py warp                                      # 정면화해서 쌍 생성
+```
+
+세션 폴더 하나에 전 단계가 쌓이고, 그대로 나머지 코드가 읽는 구조다.
+
+```
+data/collected_<MMDD>/
+├── beam/   output_video_<beamId>.jpg           [beam]     프로젝터가 쏘는 프레임
+├── raw/    ori/Ori<oriId>.jpg                  [capture]  카메라 원본, 정면화 전
+│           pro/projected_<oriId>_<beamId>.jpg  [capture]
+├── clean/  Ori<oriId>.jpg                      [warp]     정면화, 640×360
+├── pro/    projected_<oriId>_<beamId>.jpg      [warp]     정면화, 640×360
+├── debug/  <oriId>_warp.jpg                    [warp]     워핑 전후 근거
+└── collect_meta.json                           단계별 설정과 개수
+```
+
+```bash
+python demo.py     --input data/collected_0803 --gt data/collected_0803
+python train.py --data-root data/collected_0803
+```
+
+**라운드 동작.** `capture` 는 배경을 투사한 채 `s` 를 누를 때까지 기다리고, 그때 찍힌 게
+`clean` 이다. 아무것도 투사되지 않은 장면이므로 물체를 먼저 배치하고 프레임 밖으로
+빠진 뒤 누를 것. 그 시각이 `oriId` 가 되고 해당 라운드의 모든 촬영이 그 id 를 달기 때문에
+`clean` 하나에 `pro` 여러 장이 붙는다. 이후 beam 프레임을 한 장씩 투사하며 한 장씩 찍는다.
+`--rounds N` 은 장면을 바꿔가며 반복한다.
+
+**`warp` 가 필요한 이유.** 카메라 안에서 스크린은 사다리꼴이고 물체 크기도 촬영마다
+다르다. 이 단계 전까지는 학습에 못 쓴다. `warp` 는 정답 샷에서 스크린 경계를 찾아,
+그 장면의 clean 과 그 장면의 모든 촬영본을 **동일한 매핑**으로 정면화한다. 그래야 쌍이
+픽셀 격자를 공유하고 남는 차이가 투사된 빛뿐이 된다. 기본 `--warp boundary` 는
+코너 4점 호모그래피 + 실측 경계 곡선 보정이다. 비스듬히 본 평면 스크린에 대해 정확하고,
+경계가 휘어도 맞는다. `--warp tps` 는 기존 thin-plate spline 재현용인데
+`opencv-python<5` 가 필요하다 (OpenCV 5 에서 shape 모듈이 빠졌다).
+
+본 세션 전에 짧게 시험 촬영해서 `debug/<oriId>_warp.jpg` 를 먼저 확인할 것.
+
+**타이밍.** `--settle-ms`(프레임 표시 후 대기)와 `--flush`(버릴 카메라 버퍼 프레임 수)가
+촬영본과 원인이 된 프레임을 맞춰준다. `pro` 가 **직전** beam 프레임처럼 보이면 둘 다 올린다.
+
+**라벨은 수집되지 않는다.** `evaluate.py` 로 mAP 를 재려면 `clean/` 을 직접 라벨링해서
+`<세션>/labels/Ori<oriId>.txt` 로 넣어야 한다. 복원 학습과 PSNR/SSIM 은 라벨이 필요 없다.
+
+옵션 전체 표: [README_running.ko.md](../README_running.ko.md)
+
 ## 실데이터로 교체
 
 ```bash
@@ -102,6 +157,7 @@ python train.py --data-root /mnt/.../0_ImageData/1_WarpData_0520 --epochs 30
 ```
 --data-root/OriginalImage/   →   --data-root/clean/   →   --gt/clean/
 ```
+
 
 ## 용량
 

@@ -113,9 +113,11 @@ def test_iou_edges():
 
 # --- recording ----------------------------------------------------------------
 
-def test_all_kinds_are_saved_by_default():
-    assert DEFAULT_FRAME_KINDS == FRAME_KINDS
-    assert "raw" in DEFAULT_FRAME_KINDS
+def test_default_kinds_keep_the_un_annotated_footage():
+    """captures/ is what survives for a later re-analysis, so it must stay on."""
+    assert {"distorted", "restored"} <= set(DEFAULT_FRAME_KINDS)
+    assert "beam" not in DEFAULT_FRAME_KINDS
+    assert set(DEFAULT_FRAME_KINDS) < set(FRAME_KINDS)
 
 
 def test_parse_kinds_validates():
@@ -137,43 +139,72 @@ def _fake_result(frame_id=0, n_boxes=1):
     img = np.full((180, 320, 3), 64, np.uint8)
     dets = [Detection(0, "Apple", 0.9, (10, 10, 80, 80))] * n_boxes
     return FrameResult(frame_id=frame_id, name_id=f"f{frame_id:03d}", beam=img.copy(),
-                       captured=img.copy(), captured_det=img.copy(),
+                       distorted=img.copy(), distorted_det=img.copy(),
                        restored=img.copy(), restored_det=img.copy(),
                        residual=img.copy(), residual_mean=0.12,
-                       det_captured=dets, det_restored=dets,
+                       det_distorted=dets, det_restored=dets,
                        t_restore=0.01, t_detect=0.02)
 
 
-def test_recorder_honours_save_every_and_logs_every_frame():
+def test_recorder_honours_save_every_but_logs_every_frame():
     with tempfile.TemporaryDirectory() as tmp:
         with RunRecorder(tmp, save_every=3) as rec:
             for i in range(9):
                 r = _fake_result(i)
-                saved = rec.should_save(i)
-                if saved:
+                if rec.should_save(i):
                     rec.save_frame_images(r)
-                rec.log_frame(r, saved=saved)
+                rec.log_detections(r)
             rec.finish(note="test")
 
-        with open(os.path.join(tmp, "frames.csv"), encoding="utf-8") as f:
+        with open(os.path.join(tmp, "detections.csv"), encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
-        assert len(rows) == 9, "csv must cover every frame, not just the saved ones"
-        assert sum(int(r["saved"]) for r in rows) == 3
+        logged = sorted({int(r["frame_id"]) for r in rows})
+        assert logged == list(range(9)), "csv must cover every frame, not just saved ones"
 
         saved_ids = sorted({int(f.split("_")[0][1:])
-                            for f in os.listdir(os.path.join(tmp, "frames"))})
+                            for f in os.listdir(os.path.join(tmp, "captures"))})
         assert saved_ids == [0, 3, 6]
+
+
+def test_images_are_split_across_three_directories():
+    img = np.full((180, 320, 3), 64, np.uint8)
+    with tempfile.TemporaryDirectory() as tmp:
+        with RunRecorder(tmp, save_every=1) as rec:
+            rec.save_frame_images(_fake_result(0), panel=img)
+
+        assert sorted(os.listdir(os.path.join(tmp, "captures"))) == [
+            "f000_distorted.jpg", "f000_restored.jpg"], "un-annotated footage"
+        assert os.listdir(os.path.join(tmp, "frames_all")) == ["f000_panel.jpg"]
+        assert sorted(os.listdir(os.path.join(tmp, "frames"))) == [
+            "f000_distorted_det.jpg", "f000_residual.jpg", "f000_restored_det.jpg"]
+
+
+def test_demo_does_not_write_a_metrics_csv():
+    """PSNR/SSIM need ground truth; scoring belongs to evaluate.py, not demo.py."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with RunRecorder(tmp, save_every=0) as rec:
+            rec.log_detections(_fake_result(0))
+            rec.finish()
+        assert not os.path.exists(os.path.join(tmp, "frames.csv"))
+        assert os.path.exists(os.path.join(tmp, "detections.csv"))
+
+
+def test_eval_dir_is_named_after_the_input_dataset():
+    import evaluate
+    assert evaluate._eval_dir_name("data/sample_input") == "Eval_sample_input"
+    assert evaluate._eval_dir_name("data/live_20260803_161234/") == \
+        "Eval_live_20260803_161234"
 
 
 def test_recorder_writes_one_detection_row_per_box():
     with tempfile.TemporaryDirectory() as tmp:
         with RunRecorder(tmp, save_every=0) as rec:
-            rec.log_frame(_fake_result(0, n_boxes=2), saved=False)
+            rec.log_detections(_fake_result(0, n_boxes=2))
             rec.finish()
         with open(os.path.join(tmp, "detections.csv"), encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
-        assert len(rows) == 4          # 2 boxes x captured + restored
-        assert {r["source"] for r in rows} == {"captured", "restored"}
+        assert len(rows) == 4          # 2 boxes x distorted + restored
+        assert {r["source"] for r in rows} == {"distorted", "restored"}
 
 
 def test_save_every_zero_writes_no_images():
@@ -181,7 +212,7 @@ def test_save_every_zero_writes_no_images():
         with RunRecorder(tmp, save_every=0) as rec:
             r = _fake_result(0)
             assert rec.should_save(0) is False
-            rec.log_frame(r, saved=False)
+            rec.log_detections(r)
             meta = rec.finish()
         assert meta["saved_frames"] == 0
         assert not os.path.isdir(os.path.join(tmp, "frames"))
@@ -221,16 +252,14 @@ def test_offline_run_produces_clean_and_annotated_images():
     detector = build_detector("ssd", weights=SSD_W, conf=0.05, device="cpu")
 
     with tempfile.TemporaryDirectory() as tmp:
-        with RunRecorder(tmp, save_every=1) as rec:
+        # every kind, not the default subset: this test guards the clean copies
+        with RunRecorder(tmp, save_every=1, frame_kinds=FRAME_KINDS) as rec:
             summary = run_offline(SAMPLE_INPUT, restorer, detector, rec,
-                                  gt_root=SAMPLE_GT, limit=2, progress=False)
+                                  limit=2, progress=False)
             rec.finish(**summary)
 
         assert summary["images"] == 2
-        assert summary["with_ground_truth"] == 2
-        q = summary["quality"]
-        for key in ("psnr_captured", "psnr_restored", "ssim_captured", "ssim_restored"):
-            assert np.isfinite(q[key]), key
+        assert "quality" not in summary, "demo.py must not score restoration quality"
 
         # name_id contains underscores, so derive the stem from the known kinds
         # rather than splitting on '_'.
@@ -245,10 +274,13 @@ def test_offline_run_produces_clean_and_annotated_images():
                     break
         assert len(stems) == 2, stems
         for stem in stems:
-            for kind in ("restored", "restored_det", "captured", "captured_det",
-                         "beam", "residual", "panel"):
+            for kind in ("restored_det", "distorted_det", "beam", "residual"):
                 assert os.path.exists(os.path.join(frames_dir, f"{stem}_{kind}.jpg")), \
                     f"{stem}_{kind}.jpg missing"
+            for kind in ("distorted", "restored"):
+                assert os.path.exists(
+                    os.path.join(tmp, "captures", f"{stem}_{kind}.jpg")), kind
+            assert os.path.exists(os.path.join(tmp, "frames_all", f"{stem}_panel.jpg"))
 
         meta = json.load(open(os.path.join(tmp, "run_meta.json"), encoding="utf-8"))
         assert meta["images"] == 2
@@ -270,7 +302,7 @@ def test_annotated_image_differs_once_boxes_exist():
         r = process_sample(s, restorer, detector, min_area=1)
         if r.det_restored:
             assert not np.array_equal(r.restored, r.restored_det)
-            assert not np.array_equal(r.captured, r.captured_det) or not r.det_captured
+            assert not np.array_equal(r.distorted, r.distorted_det) or not r.det_distorted
             return
     pytest.skip("the detector found nothing on the sample set at conf 0.01")
 
@@ -281,7 +313,7 @@ def test_demo_parser_defaults_are_coherent():
     import demo
     args = demo.build_parser().parse_args([])
     assert args.save_every == 1 and args.live is False
-    assert parse_kinds(args.save_kinds) == FRAME_KINDS
+    assert parse_kinds(args.save_kinds) == DEFAULT_FRAME_KINDS
 
 
 def test_evaluate_parser_accepts_multiple_backends():

@@ -13,9 +13,13 @@ Live rig (webcam + projector):
     python demo.py --live --screen 2
     python demo.py --live --screen 2 --save-every 30 --debug-view
 
-Each run writes output/<run>/ with run_meta.json, detections.csv, frames.csv and the
-sampled images. `*_restored.jpg` / `*_captured.jpg` are un-annotated so PSNR/SSIM and
-re-detection stay possible; `*_det.jpg` carry the boxes.
+Restore and detect only. Scoring the result against ground truth - detection mAP and
+restoration PSNR/SSIM - is evaluate.py's job.
+
+Each run writes output/<run>/ with run_meta.json, detections.csv, the un-annotated
+captures under captures/, the annotated views under frames/ and the 2x2 comparison
+panels under frames_all/. Live runs add calib/ and warp/ - the first frame before
+and after rectification, shown on screen once as well.
 """
 
 import argparse
@@ -25,7 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from projector_distortion.cli import (  # noqa: E402
-    DEFAULT_GT, DEFAULT_INPUT, DEFAULT_LIVE_BG, DEFAULT_LIVE_VIDEO, DEFAULT_OUTPUT,
+    DEFAULT_INPUT, DEFAULT_LIVE_BG, DEFAULT_LIVE_VIDEO, DEFAULT_OUTPUT,
     add_common_args, box_filter_kwargs, build_models, run_dir,
 )
 from projector_distortion.config import resolve_path  # noqa: E402
@@ -33,6 +37,7 @@ from projector_distortion.models.restoration import add_ablation_args  # noqa: E
 from projector_distortion.utils.recording import (  # noqa: E402
     DEFAULT_FRAME_KINDS, FRAME_KINDS, RunRecorder, estimate_footprint_mb, parse_kinds,
 )
+from projector_distortion.utils.visualize import panel_size  # noqa: E402
 
 
 def build_parser():
@@ -41,8 +46,6 @@ def build_parser():
 
     p.add_argument("--input", default=DEFAULT_INPUT,
                    help="folder of pro/beam pairs (offline mode)")
-    p.add_argument("--gt", default=DEFAULT_GT,
-                   help="ground truth folder (clean/ + labels/); enables PSNR/SSIM")
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="where run folders go")
     p.add_argument("--name", default=None, help="run folder name (default: timestamp)")
     p.add_argument("--limit", type=int, default=0, help="process at most N pairs")
@@ -53,7 +56,8 @@ def build_parser():
     r.add_argument("--save-every", type=int, default=1,
                    help="write images every N frames (0 = none; csv is always complete)")
     r.add_argument("--save-kinds", default=",".join(DEFAULT_FRAME_KINDS),
-                   help=f"subset of {','.join(FRAME_KINDS)} (all by default)")
+                   help=f"subset of {','.join(FRAME_KINDS)} "
+                        f"(default: {','.join(DEFAULT_FRAME_KINDS)})")
     r.add_argument("--max-saved-frames", type=int, default=0, help="cap on saved frames")
     r.add_argument("--jpeg-quality", type=int, default=92)
     r.add_argument("--video", action="store_true",
@@ -98,7 +102,7 @@ def main(argv=None):
     box_filter = box_filter_kwargs(args, info["detection_config"])
     out_dir = run_dir(args.output, args.name)
 
-    panel_w, panel_h = restorer.input_size[0] * 2, restorer.input_size[1] * 2
+    panel_w, panel_h = panel_size(*restorer.input_size)
     want_video = args.live or args.video
 
     with RunRecorder(out_dir, save_every=args.save_every, frame_kinds=kinds,
@@ -153,7 +157,6 @@ def _run_offline(args, restorer, detector, rec, box_filter, kinds):
     from projector_distortion.pipeline import run_offline
 
     input_root = resolve_path(args.input)
-    gt_root = resolve_path(args.gt)
     if not input_root or not os.path.isdir(input_root):
         raise SystemExit(
             f"input folder not found: {args.input}\n"
@@ -165,7 +168,7 @@ def _run_offline(args, restorer, detector, rec, box_filter, kinds):
     print(f"    images every {args.save_every or '-'} frames x {len(kinds)} "
           f"kinds ~ {budget:.0f} MB")
 
-    return run_offline(input_root, restorer, detector, rec, gt_root=gt_root,
+    return run_offline(input_root, restorer, detector, rec,
                        limit=args.limit, detector_name=detector.name, **box_filter)
 
 
@@ -185,22 +188,17 @@ def _report(meta, summary, detector, out_dir):
         per = (summary.get("detections_per_image")
                or summary.get("detections_per_frame", {}))
         delta = summary.get("detection_delta_pct")
-        print(f"  {detector.name} boxes: captured {t.get('captured')} "
-              f"({per.get('captured')}/frame) -> restored {t.get('restored')} "
+        print(f"  {detector.name} boxes: distorted {t.get('distorted')} "
+              f"({per.get('distorted')}/frame) -> restored {t.get('restored')} "
               f"({per.get('restored')}/frame)"
               + (f"   {delta:+.1f}%" if delta is not None else ""))
-
-    q = summary.get("quality")
-    if q:
-        print(f"  PSNR vs clean: captured {q['psnr_captured']:.2f} dB -> "
-              f"restored {q['psnr_restored']:.2f} dB  ({q['psnr_gain_db']:+.2f})")
-        print(f"  SSIM vs clean: captured {q['ssim_captured']:.4f} -> "
-              f"restored {q['ssim_restored']:.4f}  ({q['ssim_gain']:+.4f})")
 
     print(f"  saved {meta.get('saved_frames')} frame set(s), {meta.get('image_mb')} MB"
           + (f" + {meta['video_mb']} MB video" if "video_mb" in meta else ""))
     print(f"  -> {out_dir}")
-    print("     run_meta.json | detections.csv | frames.csv | frames/")
+    print("     run_meta.json | detections.csv | captures/ | frames/ | frames_all/"
+          + (" | calib/ | warp/" if meta.get("mode") == "live" else ""))
+    print("     score it with:  python evaluate.py")
 
 
 if __name__ == "__main__":

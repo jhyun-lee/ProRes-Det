@@ -53,6 +53,7 @@ ProRes-Det/
 ├── demo.py                   restore → detect, end to end (offline / --live)
 ├── evaluate.py               detection before/after + restoration quality
 ├── train.py                  fine-tune the restoration model
+├── README_running.md         per-script options, input and output
 ├── setup.py  requirements.txt  LICENSE
 │
 ├── projector_distortion/     ── the library
@@ -65,10 +66,9 @@ ProRes-Det/
 │   ├── pipeline/             offline / live run loops
 │   └── utils/                image, visualization and recording helpers
 │
-├── docs/                     README_running.md — per-script options, in/out
 ├── tests/                    pytest suite
 ├── weights/                  3 checkpoints (51 MiB) → README_weights.md
-├── data/                     sample dataset → README_data.md
+├── data/                     sample dataset + collect.py → README_data.md
 └── output/                   run artefacts
 ```
 
@@ -79,6 +79,7 @@ ProRes-Det/
 | [demo.py](demo.py) | Entry point. Parse args → build models → run the offline/live pipeline → print a summary |
 | [evaluate.py](evaluate.py) | Entry point. Score only samples that have GT: P/R/F1/mAP plus PSNR/SSIM, then write the report |
 | [train.py](train.py) | Entry point. Training loop (L1 + perceptual + SSIM + wavelet loss) |
+| [data/collect.py](data/collect.py) | Entry point. Dataset collection with the rig: video → beam frames, projector + webcam → captures, rectification → aligned pairs |
 | [cli.py](projector_distortion/cli.py) | Args, config precedence and model construction shared by all three entry points |
 | [config.py](projector_distortion/config.py) | YAML load/merge, path resolution against the project root |
 | [data.py](projector_distortion/data.py) | Pairs pro/beam/clean/label by filename, and provides the training patch dataset |
@@ -115,9 +116,10 @@ data, are in [data/README_data.md](data/README_data.md); checkpoint details are 
 
 ```bash
 python demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
-python evaluate.py                # before/after mAP + PSNR/SSIM table → output/eval/
+python evaluate.py                # before/after mAP + PSNR/SSIM → output/Eval_<dataset>/
 python train.py --epochs 30       # retrain the restorer            → runs/<tag>/
 python demo.py --live --screen 2  # webcam + projector rig          → output/<timestamp>/
+python data/collect.py capture    # collect your own data (4 stages) → data/collected_<MMDD>/
 ```
 
 The first two need no arguments once the checkpoints are in `weights/`.
@@ -143,7 +145,7 @@ python demo.py --detector none    # restoration only, skip detection
 python demo.py --limit 5          # first 5 pairs only
 ```
 
-Input, output and the full option list for each script → [docs/README_running.md](docs/README_running.md).
+Input, output and the full option list for each script → [README_running.md](README_running.md).
 
 ---
 

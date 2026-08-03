@@ -3,14 +3,20 @@ RunRecorder - owns everything a run writes to disk.
 
     output/<run_name>/
       run_meta.json      config, environment, calibration, summary
-      detections.csv     one row per box, tagged captured | restored
-      frames.csv         one row per frame
+      detections.csv     one row per detected box, tagged distorted | restored
       calib/             calibration evidence (live runs only)
-      frames/            sampled images, `save_every` apart
+      warp/              first live frame, before and after the warp, + the figure
+      captures/          the footage itself, before any box is drawn on it
+      frames/            annotated views + residual, `save_every` apart
+      frames_all/        the 2x2 comparison panels, kept apart so they can be
+                         flipped through on their own
       result.mp4         2x2 panel
 
-Images are split into clean and annotated variants; keeping the clean copy is what
-makes PSNR/SSIM and a later re-run with another detector possible.
+Keeping captures/ un-annotated is what lets evaluate.py score the same run later, or
+another detector re-run over the identical restoration.
+
+Restoration quality (PSNR/SSIM against a clean reference) is not measured here -
+that needs ground truth and belongs to evaluate.py.
 """
 
 import csv
@@ -23,17 +29,21 @@ from datetime import datetime
 
 import cv2
 
-FRAME_KINDS = ("beam", "captured", "captured_det", "restored", "restored_det",
+FRAME_KINDS = ("beam", "distorted", "distorted_det", "restored", "restored_det",
                "residual", "panel", "raw")
-DEFAULT_FRAME_KINDS = FRAME_KINDS
+
+# `beam` stays off by default - the panel already shows it. The un-annotated
+# distorted/restored pair is kept, since only that survives a later re-analysis.
+DEFAULT_FRAME_KINDS = ("distorted", "restored", "distorted_det", "restored_det",
+                       "residual", "panel", "raw")
 
 DETECTION_FIELDS = ["frame_id", "name_id", "source", "cls_id", "name", "conf",
                     "x1", "y1", "x2", "y2"]
-FRAME_FIELDS = ["frame_id", "name_id", "t_wall", "n_captured", "n_restored",
-                "residual_mean", "t_restore_ms", "t_detect_ms", "psnr", "ssim", "saved"]
+# Each kind lands in the directory named here; anything unlisted goes to frames/.
+KIND_DIRS = {"distorted": "captures", "restored": "captures", "panel": "frames_all"}
 
 # Measured at jpeg quality 92: 640x360 tiles, 1280x720 panel, full-frame raw.
-_KB_PER_KIND = {"beam": 53, "captured": 53, "captured_det": 53, "restored": 53,
+_KB_PER_KIND = {"beam": 53, "distorted": 53, "distorted_det": 53, "restored": 53,
                 "restored_det": 53, "residual": 68, "panel": 210, "raw": 136}
 
 
@@ -66,10 +76,14 @@ class RunRecorder:
         self.max_saved_frames = max(0, int(max_saved_frames))
 
         self.frames_dir = os.path.join(self.dir, "frames")
+        self.captures_dir = os.path.join(self.dir, "captures")
+        self.panels_dir = os.path.join(self.dir, "frames_all")
         self.calib_dir = os.path.join(self.dir, "calib")
+        self.warp_dir = os.path.join(self.dir, "warp")
         os.makedirs(self.dir, exist_ok=True)
-        if self.save_every and self.frame_kinds:
-            os.makedirs(self.frames_dir, exist_ok=True)
+        if self.save_every:
+            for kind in self.frame_kinds:
+                os.makedirs(self._dir_for(kind), exist_ok=True)
 
         self.meta = {
             "started_at": datetime.now().isoformat(timespec="seconds"),
@@ -96,11 +110,6 @@ class RunRecorder:
                             encoding="utf-8")
         self._det = csv.writer(self._det_fh)
         self._det.writerow(DETECTION_FIELDS)
-
-        self._frm_fh = open(os.path.join(self.dir, "frames.csv"), "w", newline="",
-                            encoding="utf-8")
-        self._frm = csv.writer(self._frm_fh)
-        self._frm.writerow(FRAME_FIELDS)
 
     def set(self, **kwargs):
         self.meta.update(kwargs)
@@ -137,6 +146,31 @@ class RunRecorder:
                     os.path.join(self.calib_dir, f"{key}.jpg"), img))
         return [w for w in written if w]
 
+    def save_warp_pair(self, pre, post, points=None, name="first_frame"):
+        """
+        One frame's warp input and output, plus the side-by-side figure.
+
+        Live runs call this once, on the first frame off the camera. The calib/
+        shots come from the black/white flashes before the loop; these come from
+        the run itself, so they show the warp the frames were actually rectified
+        with. Returns (written paths, figure) - the caller usually also displays
+        the figure.
+        """
+        from .visualize import draw_quad, warp_before_after
+
+        os.makedirs(self.warp_dir, exist_ok=True)
+        figure = warp_before_after(pre, post, points)
+        images = {
+            "pre_warp": pre,
+            "pre_warp_quad": (draw_quad(pre, points, "pre-warp camera + calibration "
+                                                     "quad") if points else None),
+            "post_warp": post,
+            "compare": figure,
+        }
+        written = [self._imwrite(os.path.join(self.warp_dir, f"{name}_{kind}.jpg"), img)
+                   for kind, img in images.items() if img is not None]
+        return [w for w in written if w], figure
+
     def should_save(self, frame_id):
         if not self.save_every or not self.frame_kinds:
             return False
@@ -144,41 +178,37 @@ class RunRecorder:
             return False
         return frame_id % self.save_every == 0
 
-    def log_frame(self, result, saved=False, psnr=None, ssim=None):
-        """CSV rows for one frame. Call for every frame, saved or not."""
-        for source, dets in (("captured", result.det_captured),
+    def log_detections(self, result):
+        """One csv row per detected box. Call for every frame, saved or not."""
+        for source, dets in (("distorted", result.det_distorted),
                              ("restored", result.det_restored)):
             for d in dets:
                 x1, y1, x2, y2 = (int(v) for v in d.box)
                 self._det.writerow([result.frame_id, result.name_id, source, d.cls_id,
                                     d.name, f"{d.conf:.4f}", x1, y1, x2, y2])
-        self._frm.writerow([
-            result.frame_id, result.name_id, f"{time.time() - self._t0:.3f}",
-            len(result.det_captured), len(result.det_restored),
-            f"{result.residual_mean:.5f}",
-            f"{result.t_restore * 1000:.1f}", f"{result.t_detect * 1000:.1f}",
-            "" if psnr is None else f"{psnr:.3f}",
-            "" if ssim is None else f"{ssim:.5f}",
-            int(saved),
-        ])
+
+    def _dir_for(self, kind):
+        return os.path.join(self.dir, KIND_DIRS.get(kind, "frames"))
 
     def save_frame_images(self, result, panel=None, raw_frame=None):
         """Write the configured kinds for this frame; returns how many were written."""
         images = {
             "beam": result.beam,
-            "captured": result.captured,
-            "captured_det": result.captured_det,
+            "distorted": result.distorted,
+            "distorted_det": result.distorted_det,
             "restored": result.restored,
             "restored_det": result.restored_det,
             "residual": result.residual,
             "panel": panel,
             "raw": raw_frame,
         }
-        base = os.path.join(self.frames_dir, str(result.name_id))
         n = 0
         for kind in self.frame_kinds:
             img = images.get(kind)
-            if img is not None and self._imwrite(f"{base}_{kind}.jpg", img):
+            if img is None:
+                continue
+            path = os.path.join(self._dir_for(kind), f"{result.name_id}_{kind}.jpg")
+            if self._imwrite(path, img):
                 n += 1
         if n:
             self.saved_frames += 1
@@ -210,10 +240,9 @@ class RunRecorder:
         if self.writer is not None:
             self.writer.release()
             self.writer = None
-        for attr in ("_det_fh", "_frm_fh"):
-            fh = getattr(self, attr, None)
-            if fh and not fh.closed:
-                fh.close()
+        fh = getattr(self, "_det_fh", None)
+        if fh and not fh.closed:
+            fh.close()
 
     def __enter__(self):
         return self

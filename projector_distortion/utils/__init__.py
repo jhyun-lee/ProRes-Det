@@ -24,14 +24,16 @@ from .visualize import (
     draw_ground_truth,
     draw_quad,
     grid_2x2,
+    panel_size,
     side_by_side,
+    warp_before_after,
 )
 
 __all__ = [
     "read_bgr", "resize", "bgr_to_tensor", "tensor_to_bgr", "residual_to_bgr",
     "psnr", "ssim", "iou", "IMAGE_EXT",
     "draw_detections", "draw_ground_truth", "caption", "side_by_side", "grid_2x2",
-    "draw_quad",
+    "panel_size", "draw_quad", "warp_before_after",
     "RunRecorder", "FRAME_KINDS", "DEFAULT_FRAME_KINDS", "parse_kinds",
     "estimate_footprint_mb",
 ]

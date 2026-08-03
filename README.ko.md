@@ -50,6 +50,7 @@ ProRes-Det/
 ├── demo.py                   복원 → 검출 전체 흐름 (오프라인 / --live)
 ├── evaluate.py               복원 전후 검출 성능 + 복원 품질 측정
 ├── train.py                  복원 모델 미세조정
+├── README_running.ko.md      스크립트별 옵션·입력·출력
 ├── setup.py  requirements.txt  LICENSE
 │
 ├── projector_distortion/     ── 라이브러리 본체
@@ -62,10 +63,9 @@ ProRes-Det/
 │   ├── pipeline/             오프라인 / 라이브 실행 루프
 │   └── utils/                이미지·시각화·기록 헬퍼
 │
-├── docs/                     README_running.ko.md — 스크립트별 옵션·입력·출력
 ├── tests/                    pytest 테스트
 ├── weights/                  가중치 3개 (51 MiB) → README_weights.ko.md
-├── data/                     샘플 데이터셋 → README_data.ko.md
+├── data/                     샘플 데이터셋 + collect.py → README_data.ko.md
 └── output/                   실행 결과
 ```
 
@@ -76,6 +76,7 @@ ProRes-Det/
 | [demo.py](demo.py) | 진입점. 인자 파싱 → 모델 생성 → 오프라인/라이브 파이프라인 실행 → 요약 출력 |
 | [evaluate.py](evaluate.py) | 진입점. GT 가 있는 샘플만 골라 P/R/F1/mAP 와 PSNR/SSIM 계산 후 리포트 저장 |
 | [train.py](train.py) | 진입점. 복원 모델 학습 루프 (L1 + perceptual + SSIM + wavelet 손실) |
+| [data/collect.py](data/collect.py) | 진입점. 리그로 데이터셋 수집: 영상 → beam 프레임, 프로젝터+웹캠 → 촬영본, 정면화 → 정합된 쌍 |
 | [cli.py](projector_distortion/cli.py) | 세 진입점이 공유하는 인자·설정 우선순위·모델 생성 로직 |
 | [config.py](projector_distortion/config.py) | YAML 로드/병합, 프로젝트 루트 기준 경로 해석 |
 | [data.py](projector_distortion/data.py) | 파일명으로 pro/beam/clean/label 을 짝짓고, 학습용 패치 데이터셋 제공 |
@@ -111,9 +112,10 @@ clone 직후 별도 다운로드 없이 바로 실행된다.
 
 ```bash
 python demo.py                    # 번들 샘플 22쌍 복원 + 검출 → output/<타임스탬프>/
-python evaluate.py                # 복원 전/후 mAP + PSNR/SSIM 표 → output/eval/
+python evaluate.py                # 복원 전/후 mAP + PSNR/SSIM → output/Eval_<데이터셋>/
 python train.py --epochs 30       # 복원 모델 재학습            → runs/<tag>/
 python demo.py --live --screen 2  # 웹캠 + 프로젝터 리그         → output/<타임스탬프>/
+python data/collect.py capture    # 직접 데이터 수집 (4단계)     → data/collected_<MMDD>/
 ```
 
 앞의 두 개는 `weights/` 에 체크포인트만 있으면 인자 없이 바로 돈다.
@@ -138,7 +140,7 @@ python demo.py --detector none    # 복원만, 검출 생략
 python demo.py --limit 5          # 앞 5쌍만
 ```
 
-각 스크립트의 입력·출력·전체 옵션 → [docs/README_running.ko.md](docs/README_running.ko.md).
+각 스크립트의 입력·출력·전체 옵션 → [README_running.ko.md](README_running.ko.md).
 
 ---
 

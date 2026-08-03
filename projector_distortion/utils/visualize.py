@@ -3,12 +3,25 @@
 import cv2
 import numpy as np
 
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
 BOX_COLOR = (0, 255, 0)
 TEXT_COLOR = (0, 0, 255)
 GT_COLOR = (0, 200, 255)
 
 CORNER_TAGS = ("TL", "TR", "BR", "BL")
 _CORNER_COLORS = ((0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 128, 0))
+
+# 2x2 panel: captions sit on the background below each tile, never over the image.
+SUBFIG_TAGS = ("(a)", "(b)", "(c)", "(d)")
+PANEL_BG = (255, 255, 255)
+PANEL_TEXT = (32, 32, 32)
+PANEL_GAP = 12
+PANEL_LABEL_H = 34
+PANEL_FONT_SCALE = 0.55
+
+# Width of the arrow column between the two tiles of the before/after warp figure.
+WARP_ARROW_W = 80
 
 
 def draw_detections(img, detections, color=BOX_COLOR, text_color=TEXT_COLOR,
@@ -48,17 +61,38 @@ def side_by_side(left, right, left_label="before", right_label="after") -> np.nd
                         caption(right.copy(), right_label)])
 
 
+def panel_size(tile_w, tile_h):
+    """Canvas size grid_2x2 produces for tiles of this size, as (width, height)."""
+    return (tile_w * 2 + PANEL_GAP * 3,
+            (tile_h + PANEL_LABEL_H) * 2 + PANEL_GAP * 3)
+
+
 def grid_2x2(top_left, top_right, bottom_left, bottom_right, labels=None) -> np.ndarray:
-    """2x2 comparison panel; all four tiles are resized onto the first one."""
+    """
+    2x2 comparison panel, laid out like a paper figure.
+
+    Tiles are resized onto the first one and captioned "(a) …" on the background
+    strip below each, so no text ever covers image content.
+    """
     h, w = top_left.shape[:2]
-    tiles = []
+    canvas_w, canvas_h = panel_size(w, h)
+    canvas = np.full((canvas_h, canvas_w, 3), PANEL_BG, np.uint8)
+
     for i, img in enumerate((top_left, top_right, bottom_left, bottom_right)):
-        t = img if img.shape[:2] == (h, w) else cv2.resize(img, (w, h))
-        t = t.copy()
+        tile = img if img.shape[:2] == (h, w) else cv2.resize(img, (w, h))
+        x = PANEL_GAP + (i % 2) * (w + PANEL_GAP)
+        y = PANEL_GAP + (i // 2) * (h + PANEL_LABEL_H + PANEL_GAP)
+        canvas[y:y + h, x:x + w] = tile
+
+        text = SUBFIG_TAGS[i]
         if labels and i < len(labels) and labels[i]:
-            caption(t, labels[i])
-        tiles.append(t)
-    return cv2.vconcat([cv2.hconcat(tiles[:2]), cv2.hconcat(tiles[2:])])
+            text = f"{text} {labels[i]}"
+        (text_w, text_h), _ = cv2.getTextSize(text, FONT, PANEL_FONT_SCALE, 1)
+        cv2.putText(canvas, text,
+                    (x + max(0, (w - text_w) // 2),
+                     y + h + (PANEL_LABEL_H + text_h) // 2),
+                    FONT, PANEL_FONT_SCALE, PANEL_TEXT, 1, cv2.LINE_AA)
+    return canvas
 
 
 def draw_quad(frame, points, title=None, thickness=2) -> np.ndarray:
@@ -81,4 +115,49 @@ def draw_quad(frame, points, title=None, thickness=2) -> np.ndarray:
                     0.55, color, 1, cv2.LINE_AA)
     if title:
         caption(canvas, title, scale=0.7)
+    return canvas
+
+
+def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.ndarray:
+    """
+    The raw camera view next to the rectified one, with the arrow between them.
+
+    The two rarely share a resolution - one is the camera sensor, the other the
+    model input - so each tile keeps its own aspect ratio and the sizes go into the
+    captions. `points` draws the calibration quad on the left tile, which is what
+    makes a mis-ordered or drifted warp obvious.
+    """
+    left = draw_quad(pre, points) if points else pre.copy()
+    right = post.copy()
+    if labels is None:
+        labels = (f"(a) pre-warp camera {pre.shape[1]}x{pre.shape[0]}",
+                  f"(b) post-warp {post.shape[1]}x{post.shape[0]}")
+
+    tiles = []
+    for img in (left, right):
+        scale = tile_w / img.shape[1]
+        tiles.append(cv2.resize(img, (tile_w, max(1, round(img.shape[0] * scale)))))
+    tile_h = max(t.shape[0] for t in tiles)
+
+    canvas_w = PANEL_GAP * 2 + tile_w * 2 + WARP_ARROW_W
+    canvas_h = PANEL_GAP * 2 + tile_h + PANEL_LABEL_H
+    canvas = np.full((canvas_h, canvas_w, 3), PANEL_BG, np.uint8)
+
+    for i, tile in enumerate(tiles):
+        x = PANEL_GAP + i * (tile_w + WARP_ARROW_W)
+        y = PANEL_GAP + (tile_h - tile.shape[0]) // 2
+        canvas[y:y + tile.shape[0], x:x + tile_w] = tile
+
+        text = labels[i] if i < len(labels) else ""
+        (text_w, text_h), _ = cv2.getTextSize(text, FONT, PANEL_FONT_SCALE, 1)
+        cv2.putText(canvas, text,
+                    (x + max(0, (tile_w - text_w) // 2),
+                     PANEL_GAP + tile_h + (PANEL_LABEL_H + text_h) // 2),
+                    FONT, PANEL_FONT_SCALE, PANEL_TEXT, 1, cv2.LINE_AA)
+
+    mid_x, mid_y = PANEL_GAP + tile_w, PANEL_GAP + tile_h // 2
+    cv2.arrowedLine(canvas, (mid_x + 14, mid_y), (mid_x + WARP_ARROW_W - 14, mid_y),
+                    PANEL_TEXT, 3, cv2.LINE_AA, tipLength=0.4)
+    cv2.putText(canvas, "warp", (mid_x + 14, mid_y - 14), FONT, 0.5, PANEL_TEXT, 1,
+                cv2.LINE_AA)
     return canvas

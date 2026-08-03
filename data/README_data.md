@@ -8,6 +8,7 @@ clone.
 
 ```
 data/
+├── collect.py              build your own dataset with a projector and a webcam
 ├── sample_input/           input for demo.py / evaluate.py / train.py
 │   ├── pro/    projected_<oriId>_<beamId>.jpg   22 files, 640×360
 │   └── beam/   output_video_<beamId>.jpg        22 files, mixed sizes
@@ -87,6 +88,63 @@ Standard YOLO — one line per box, `<cls_id> <cx> <cy> <w> <h>`, all normalised
 (Apple … Watermelon) then 6 animals (Cat … Snake). All 17 classes appear in the bundled
 labels.
 
+## Collecting your own — `collect.py`
+
+The sample set above was made this way. Four stages; `check` and `capture` need the rig,
+`beam` and `warp` are plain file work.
+
+```bash
+python data/collect.py check                                     # monitors + webcam
+python data/collect.py beam    --src data/live/BeamVideo.mp4     # video -> beam frames
+python data/collect.py capture --screen 2 --rounds 3             # project and shoot
+python data/collect.py warp                                      # rectify into pairs
+```
+
+One session folder holds every stage, already in the layout the rest of the repo reads:
+
+```
+data/collected_<MMDD>/
+├── beam/   output_video_<beamId>.jpg           [beam]     what the projector emits
+├── raw/    ori/Ori<oriId>.jpg                  [capture]  camera frames, unrectified
+│           pro/projected_<oriId>_<beamId>.jpg  [capture]
+├── clean/  Ori<oriId>.jpg                      [warp]     rectified, 640×360
+├── pro/    projected_<oriId>_<beamId>.jpg      [warp]     rectified, 640×360
+├── debug/  <oriId>_warp.jpg                    [warp]     before/after evidence
+└── collect_meta.json                           every stage's settings and counts
+```
+
+```bash
+python demo.py     --input data/collected_0803 --gt data/collected_0803
+python train.py --data-root data/collected_0803
+```
+
+**How a round works.** `capture` projects the background, waits for you to press `s`, and
+that shot becomes `clean` — the scene with nothing projected on it, so place the objects
+and step out of frame first. Its timestamp becomes the `oriId`, and every capture of that
+round carries it, which is how many `pro` files end up pointing at one `clean`. Then each
+beam frame is projected once and captured once. `--rounds N` repeats with a new scene.
+
+**Why `warp` exists.** In the camera the screen is a trapezoid and the objects sit at a
+different scale in every capture, so nothing before this stage is trainable. `warp` finds
+the screen boundary in the clean shot and rectifies that scene's clean frame *and* all its
+captures with the identical mapping, so the pair shares a pixel grid and the only
+difference left is the projected light. Default `--warp boundary` is the 4-corner
+homography plus a correction from the measured edge curves — exact for a flat screen seen
+off-axis, and still right when the edges bow. `--warp tps` reproduces the older thin-plate
+spline warp, but needs `opencv-python<5` (OpenCV 5 removed the shape module).
+
+Check `debug/<oriId>_warp.jpg` on a short trial session before committing to a long one.
+
+**Timing.** `--settle-ms` (wait after showing a frame) and `--flush` (buffered camera
+frames to drop) are what keep a capture matched to the frame that caused it. If `pro`
+looks like the *previous* beam frame, raise both.
+
+**Labels are not collected.** `clean/` has to be annotated by hand into
+`<session>/labels/Ori<oriId>.txt` before `evaluate.py` can score mAP. Restoration
+training and PSNR/SSIM need no labels.
+
+Full option tables: [README_running.md](../README_running.md).
+
 ## Swapping in real data
 
 ```bash
@@ -104,6 +162,7 @@ exists — no symlink or copy needed:
 ```
 --data-root/OriginalImage/   →   --data-root/clean/   →   --gt/clean/
 ```
+
 
 ## Size
 

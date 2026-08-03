@@ -10,7 +10,7 @@ before and after restoration.
     detector = build_detector("ssd", "weights/detector_ssdlite.pth")
     for i, s in enumerate(find_samples("data/sample_input", "data/sample_gt")):
         r = process_sample(s, restorer, detector, frame_id=i)
-        print(s.name_id, len(r.det_captured), "->", len(r.det_restored))
+        print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
 """
 
 __version__ = "0.1.0"

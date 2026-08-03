@@ -6,6 +6,9 @@ Live pipeline: webcam + projector rig. Needs real hardware.
     the frame shown --offset frames ago -> `beam`
     restore(pro, beam) -> detect both -> 2x2 panel + recorder
 
+The first frame's warp input and output are written to warp/ and shown once, so the
+rectification the whole run depends on can be checked without stopping it.
+
 On Windows, cv2.setWindowProperty(WND_PROP_FULLSCREEN) snaps the window back to the
 primary display and silently undoes cv2.moveWindow(), which is why a naive --screen
 has no effect. Geometry goes through the Win32 API instead.
@@ -30,11 +33,16 @@ from ..utils.visualize import draw_quad, grid_2x2
 WINDOW = "Projector_Display"
 PANEL = "Combined_View"
 DEBUG_WINDOW = "PreWarp_Debug"
+WARP_WINDOW = "Warp_FirstFrame"
 
 CLICK_ORDER = "TL -> TR -> BR -> BL"
 
 CAM_BACKENDS = {"auto": None, "any": cv2.CAP_ANY, "dshow": cv2.CAP_DSHOW,
                 "msmf": cv2.CAP_MSMF, "v4l2": cv2.CAP_V4L2}
+
+# Frames allowed inside the restore/detect worker at once. 1 would make the handoff
+# synchronous again; more only adds latency between the projector and the panel.
+MAX_IN_FLIGHT = 2
 
 
 def _step(msg):
@@ -385,13 +393,13 @@ class LiveResult:
     frame_id: int
     name_id: str
     beam: np.ndarray
-    captured: np.ndarray
-    captured_det: np.ndarray
+    distorted: np.ndarray
+    distorted_det: np.ndarray
     restored: np.ndarray
     restored_det: np.ndarray
     residual: np.ndarray
     residual_mean: float = 0.0
-    det_captured: List = field(default_factory=list)
+    det_distorted: List = field(default_factory=list)
     det_restored: List = field(default_factory=list)
     t_restore: float = 0.0
     t_detect: float = 0.0
@@ -405,17 +413,17 @@ def _worker(frame_queue, result_queue, restorer, detector, stop_event,
 
     while not stop_event.is_set():
         try:
-            frame_id, captured, beam = frame_queue.get(timeout=0.5)
+            frame_id, distorted, beam = frame_queue.get(timeout=0.5)
         except queue.Empty:
             continue
 
         t0 = time.perf_counter()
-        restored_clean, residual, residual_mean = restorer.restore_full(captured, beam)
+        restored_clean, residual, residual_mean = restorer.restore_full(distorted, beam)
         t_restore = time.perf_counter() - t0
 
-        captured_clean = resize(captured, tuple(restorer.input_size))
+        distorted_clean = resize(distorted, tuple(restorer.input_size))
         t1 = time.perf_counter()
-        raw_c = detector(captured_clean)
+        raw_c = detector(distorted_clean)
         raw_r = detector(restored_clean)
         t_detect = time.perf_counter() - t1
 
@@ -427,12 +435,12 @@ def _worker(frame_queue, result_queue, restorer, detector, stop_event,
         result = LiveResult(
             frame_id=frame_id, name_id=f"frame_{frame_id:06d}",
             beam=beam,
-            captured=captured_clean,
-            captured_det=draw_detections(captured_clean.copy(), det_c),
+            distorted=distorted_clean,
+            distorted_det=draw_detections(distorted_clean.copy(), det_c),
             restored=restored_clean,
             restored_det=draw_detections(restored_clean.copy(), det_r),
             residual=residual, residual_mean=residual_mean,
-            det_captured=det_c, det_restored=det_r,
+            det_distorted=det_c, det_restored=det_r,
             t_restore=t_restore, t_detect=t_detect,
         )
         try:
@@ -443,11 +451,11 @@ def _worker(frame_queue, result_queue, restorer, detector, stop_event,
 
 def build_panel(result, detector_name="detector") -> np.ndarray:
     return grid_2x2(
-        result.beam, result.captured_det, result.restored_det, result.residual,
+        result.beam, result.distorted_det, result.restored_det, result.residual,
         labels=["beam (projected source)",
-                f"captured + {detector_name} ({len(result.det_captured)})",
+                f"distorted + {detector_name} ({len(result.det_distorted)})",
                 f"restored + {detector_name} ({len(result.det_restored)})",
-                f"|residual| mean {result.residual_mean:.3f}"],
+                f"residual (mean {result.residual_mean:.3f})"],
     )
 
 
@@ -553,13 +561,61 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     pro_buffer = [background_small.copy() for _ in range(max(0, offset))]
 
     frame_count = processed = dropped = 0
-    totals = {"captured": 0, "restored": 0}
+    totals = {"distorted": 0, "restored": 0}
     sums = {"residual": 0.0, "t_restore": 0.0, "t_detect": 0.0}
+    # The worker holds a frame while the main thread captures the next one, so the
+    # camera read, the warp and the panel encode overlap with restore+detect instead
+    # of queueing behind them. Two is enough to cover the gap and keeps the panel
+    # at most one frame behind what the projector is showing.
+    in_flight, pending_raw = 0, {}
+    stop = False
+
+    def consume(result):
+        """Record and display one finished frame. Returns False when 'q' was hit."""
+        nonlocal processed
+        panel = build_panel(result, detector_name)
+        recorder.write_video(panel)
+        if recorder.should_save(result.frame_id):
+            recorder.save_frame_images(result, panel=panel,
+                                       raw_frame=pending_raw.get(result.frame_id))
+        recorder.log_detections(result)
+        pending_raw.pop(result.frame_id, None)
+
+        totals["distorted"] += len(result.det_distorted)
+        totals["restored"] += len(result.det_restored)
+        sums["residual"] += result.residual_mean
+        sums["t_restore"] += result.t_restore
+        sums["t_detect"] += result.t_detect
+        processed += 1
+        if processed == 1:
+            print(f"first frame through the pipeline in {time.time() - t0:.1f}s "
+                  f"(includes warmup).", flush=True)
+
+        cv2.imshow(PANEL, panel)
+        return (cv2.waitKey(1) & 0xFF) != ord("q")
+
+    def drain(block_until):
+        """Take finished frames until only `block_until` are still in the worker."""
+        nonlocal in_flight, dropped, stop
+        while in_flight > block_until or (in_flight and not result_queue.empty()):
+            try:
+                result = result_queue.get(timeout=10)
+            except queue.Empty:
+                print(f"warning: {in_flight} frame(s) produced no result in 10s.")
+                dropped += in_flight
+                in_flight = 0
+                return
+            in_flight -= 1
+            if not consume(result):
+                print("stopped by user.")
+                stop = True
+                return
+
     print("running - press 'q' in the Combined_View window to stop.", flush=True)
     t0 = time.time()
 
     try:
-        while True:
+        while not stop:
             if max_frames and frame_count >= max_frames:
                 print(f"reached max_frames={max_frames}.")
                 break
@@ -568,7 +624,15 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
             if not ok_c:
                 print("webcam ended.")
                 break
-            captured = warp(cam_frame, matrix, w_cal, h_cal, out_size)
+            distorted = warp(cam_frame, matrix, w_cal, h_cal, out_size)
+
+            if frame_count == 0:
+                # Once per run: what the camera saw and what the warp made of it.
+                written, figure = recorder.save_warp_pair(cam_frame, distorted, points)
+                print(f"first-frame warp: {len(written)} image(s) -> "
+                      f"{recorder.warp_dir}")
+                cv2.imshow(WARP_WINDOW, figure)
+                cv2.waitKey(1)
 
             ok_p, pro_frame = clip.read()
             if not ok_p:
@@ -585,41 +649,18 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
 
             beam = pro_buffer.pop(0)
             try:
-                frame_queue.put((frame_count, captured, beam), timeout=1.0)
+                frame_queue.put((frame_count, distorted, beam), timeout=1.0)
             except queue.Full:
                 dropped += 1
                 frame_count += 1
                 continue
-            try:
-                result = result_queue.get(timeout=10)
-            except queue.Empty:
-                dropped += 1
-                print(f"warning: frame {frame_count} produced no result in 10s.")
-                frame_count += 1
-                continue
-
-            panel = build_panel(result, detector_name)
-            recorder.write_video(panel)
-            saved = recorder.should_save(result.frame_id)
-            if saved:
-                recorder.save_frame_images(result, panel=panel, raw_frame=cam_frame)
-            recorder.log_frame(result, saved=saved)
-
-            totals["captured"] += len(result.det_captured)
-            totals["restored"] += len(result.det_restored)
-            sums["residual"] += result.residual_mean
-            sums["t_restore"] += result.t_restore
-            sums["t_detect"] += result.t_detect
-            processed += 1
-            if processed == 1:
-                print(f"first frame through the pipeline in {time.time() - t0:.1f}s "
-                      f"(includes warmup).", flush=True)
-
-            cv2.imshow(PANEL, panel)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("stopped by user.")
-                break
+            pending_raw[frame_count] = cam_frame
+            in_flight += 1
             frame_count += 1
+
+            drain(block_until=MAX_IN_FLIGHT - 1)
+
+        drain(block_until=0)        # the clip ended; finish what the worker still holds
     except KeyboardInterrupt:
         print("\ninterrupted.")
     finally:
@@ -641,7 +682,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         "avg_restore_ms": round(sums["t_restore"] / n * 1000, 2),
         "avg_detect_ms": round(sums["t_detect"] / n * 1000, 2),
     }
-    if totals["captured"]:
+    if totals["distorted"]:
         summary["detection_delta_pct"] = round(
-            (totals["restored"] - totals["captured"]) / totals["captured"] * 100, 1)
+            (totals["restored"] - totals["distorted"]) / totals["distorted"] * 100, 1)
     return summary
