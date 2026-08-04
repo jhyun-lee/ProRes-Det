@@ -9,17 +9,23 @@ clone.
 ```
 data/
 ├── collect.py              build your own dataset with a projector and a webcam
-├── sample_input/           input for demo.py / evaluate.py / train.py
+├── record.py               project a clip and record the camera's view (no models)
+├── sample_input/           input *and* ground truth for demo / evaluate / train
 │   ├── pro/    projected_<oriId>_<beamId>.jpg   22 files, 640×360
-│   └── beam/   output_video_<beamId>.jpg        22 files, mixed sizes
-├── sample_gt/              ground truth (demo.py runs without it, just unscored)
+│   ├── beam/   output_video_<beamId>.jpg        22 files, mixed sizes
 │   ├── clean/  Ori<oriId>.jpg      10 files, 640×360  ← training target / PSNR·SSIM ref
 │   └── labels/ Ori<oriId>.txt      10 files, 107 boxes total  ← mAP ref (YOLO format)
-└── live/                   input for demo.py --live
-    ├── BeamVideo.mp4       clip to play through the projector
-    │                       5,858 frames @30fps = 3.3 min, 854×480, 55 MiB
-    └── BaseBackGround.jpg  background shown during calibration, 1280×960
+├── live/                   input for demo.py --live
+│   ├── BeamVideo.mp4       clip to play through the projector
+│   │                       5,858 frames @30fps = 3.3 min, 854×480, 55 MiB
+│   └── BaseBackGround.jpg  background shown during calibration, 1280×960
+├── sample_video/           two short clips, an alternative to BeamVideo
+└── recordings/             where record.py writes (git-ignored)
 ```
+
+`clean/` and `labels/` sit inside `sample_input/`, so `--input` and `--gt` take the
+same path. Both are optional: without `clean/` the run still works, it just cannot be
+scored.
 
 Image sizes need not match. The pipeline resizes everything to the model's
 `input_size` (640×360 by default), which is why `beam/` mixes 854×480 and 1280×720
@@ -34,8 +40,8 @@ projected_0409001429_0404023332_294_75.jpg
           └───┬────┘ └──────┬───────┘
             oriId         beamId
 
-  → sample_gt/clean/Ori0409001429.jpg                     (ground truth screen)
-  → sample_gt/labels/Ori0409001429.txt                    (detection ground truth)
+  → sample_input/clean/Ori0409001429.jpg                  (ground truth screen)
+  → sample_input/labels/Ori0409001429.txt                 (detection ground truth)
   → sample_input/beam/output_video_0404023332_294_75.jpg  (frame the projector emitted)
 ```
 
@@ -66,7 +72,7 @@ Two are auto-detected by which folder exists.
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/sample_input --gt data/sample_gt      # flat
+python demo.py --input data/sample_input --gt data/sample_input   # flat
 python demo.py --input /path/to/WarpData_0520                     # research, auto-detected
 ```
 
@@ -145,6 +151,22 @@ training and PSNR/SSIM need no labels.
 
 Full option tables: [README_running.md](../README_running.md).
 
+## Just recording — `record.py`
+
+`collect.py` builds a *dataset*: still pairs, rectified and id-matched. `record.py`
+builds a *video*: it projects a clip and records the camera's view as one mp4, with no
+restoration, no detection and no weights loaded.
+
+```bash
+python data/record.py --screen 2 --seconds 30
+python data/record.py --warp --rec-size 640 360     # record the rectified screen
+```
+
+Output is `data/recordings/rec_<MMDDHHMMSS>.mp4` plus a `.json` holding the settings the
+run actually used and the measured capture rate. The directory is git-ignored. Use it
+to capture raw distorted footage before there is a checkpoint, or to check a rig end to
+end. Full option table: [README_running.md](../README_running.md).
+
 ## Swapping in real data
 
 ```bash
@@ -166,12 +188,9 @@ exists — no symlink or copy needed:
 
 ## Size
 
-`data/` is 59 MiB, almost all of it `data/live/BeamVideo.mp4` (55 MiB). Delete that file
-if you never use `--live`.
-
-> `data/sample_input/clean` is a **broken symlink** pointing at an absolute path from
-> another machine. The current code ignores it, but a plain `os.walk('data')` will
-> break on it. Cleaning up is advised: `git rm data/sample_input/clean`
+`data/` is 82 MiB tracked, almost all of it video: `live/BeamVideo.mp4` (55 MiB) and
+`sample_video/` (23 MiB). The dataset proper is 4.4 MiB. Delete the clips if you never
+use `--live` or `record.py`.
 
 ---
 

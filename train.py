@@ -110,8 +110,15 @@ def build_parser():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data-root", default="data/sample_input",
                    help="folder with pro/ beam/ clean/ (or the research layout)")
-    p.add_argument("--gt", default="data/sample_gt",
+    p.add_argument("--gt", default=None,
                    help="where clean/ lives when it is not under --data-root")
+    p.add_argument("--pro-dir", default=None,
+                   help="distorted captures; a directory, a glob, or several. Given "
+                        "with --beam-dir/--clean-dir this replaces --data-root, which "
+                        "is how a date-partitioned set is read (default: train.data "
+                        "in configs/restoration.yaml)")
+    p.add_argument("--beam-dir", default=None, help="projector frames")
+    p.add_argument("--clean-dir", default=None, help="un-projected targets")
     p.add_argument("--out", default="runs", help="parent folder for run directories")
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
@@ -204,10 +211,22 @@ def main(argv=None):
     print(f"    run dir {run}")
     print("=" * 74)
 
-    data_root = resolve_path(args.data_root) or args.data_root
-    clean_root = _clean_root(data_root, resolve_path(args.gt))
-    triplets = index_triplets(data_root, clean_root=clean_root,
-                              sample=args.sample, seed=args.seed)
+    # Three explicit directories win over a single root: the captured sets are
+    # date-partitioned and their beam frames live somewhere else entirely.
+    configured = tcfg.get("data") or {}
+    pro_dir = args.pro_dir or configured.get("pro")
+    beam_dir = args.beam_dir or configured.get("beam")
+    clean_dir = args.clean_dir or configured.get("clean")
+
+    if pro_dir or beam_dir or clean_dir:
+        data_root = {"pro": pro_dir, "beam": beam_dir, "clean": clean_dir}
+        triplets = index_triplets(pro=pro_dir, beam=beam_dir, clean=clean_dir,
+                                  sample=args.sample, seed=args.seed)
+    else:
+        data_root = resolve_path(args.data_root) or args.data_root
+        clean_root = _clean_root(data_root, resolve_path(args.gt))
+        triplets = index_triplets(data_root, clean_root=clean_root,
+                                  sample=args.sample, seed=args.seed)
     patch = tuple(pick(None, tcfg, "patch_size", default=[180, 320]))
     big = tuple(pick(None, tcfg, "resize_to", default=[360, 640]))
     dataset = TripletPatchDataset(triplets, small_size=patch, big_size=big)

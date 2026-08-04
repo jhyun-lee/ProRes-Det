@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Score detection and restoration before vs after, against data/sample_gt.
+Score detection and restoration before vs after, against data/sample_input.
 
     python evaluate.py
     python evaluate.py --detector ssd --conf 0.3

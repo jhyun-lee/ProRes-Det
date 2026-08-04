@@ -1,0 +1,25 @@
+# CUDA build of torch, in one command with everything else:
+#
+#     pip install -e ".[all]" -r requirements-cuda.txt
+#
+# An extra is not enough on its own: a package cannot name the index it wants to be
+# fetched from, and the default PyPI `torch` wheel carries no CUDA on Windows. Hence
+# an index line here, plus pins - PyPI usually has a *newer* torch than the CUDA
+# index does, and pip would otherwise resolve straight back to the CPU wheel.
+#
+# The pins are the newest pair verified against this repo per Python version. To move
+# up, list what the index has for your interpreter and keep torch/torchvision matched
+# (2.8 <-> 0.23, 2.9 <-> 0.24, 2.10 <-> 0.25, 2.11 <-> 0.26):
+#
+#     pip index versions torch --index-url https://download.pytorch.org/whl/cu128
+#
+# cu128 covers RTX 50-series (Blackwell) and everything older a 12.8 driver supports.
+# For an older driver, swap every cu128 below for cu121 or cu118.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0+cu128 ; python_version < "3.10"
+torchvision==0.23.0+cu128 ; python_version < "3.10"
+
+torch==2.9.0+cu128 ; python_version >= "3.10"
+torchvision==0.24.0+cu128 ; python_version >= "3.10"

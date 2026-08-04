@@ -1,4 +1,8 @@
 # Base install: everything demo.py / evaluate.py need with --detector ssd or none.
+#
+# On Windows the default PyPI wheel below is CPU-only, and nothing fails - the run is
+# just ~25x slower. For the CUDA build, add requirements-cuda.txt to the same command:
+#   pip install -e ".[all]" -r requirements-cuda.txt
 torch>=1.13
 torchvision>=0.14
 opencv-python>=4.5

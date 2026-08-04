@@ -208,7 +208,6 @@ def test_recorder_writes_the_first_frame_warp_pair():
             written, fig = rec.save_warp_pair(pre, post, [(10, 10), (600, 20),
                                                           (620, 500), (20, 480)])
         assert fig is not None
-        assert len(written) == 4
-        assert sorted(os.listdir(os.path.join(tmp, "warp"))) == [
-            "first_frame_compare.jpg", "first_frame_post_warp.jpg",
-            "first_frame_pre_warp.jpg", "first_frame_pre_warp_quad.jpg"]
+        assert len(written) == 3
+        assert sorted(os.listdir(os.path.join(tmp, "calib"))) == [
+            "frame_compare.jpg", "frame_post.jpg", "frame_pre.jpg"]

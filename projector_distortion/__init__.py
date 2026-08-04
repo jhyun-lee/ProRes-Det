@@ -8,7 +8,8 @@ before and after restoration.
 
     restorer = build_restorer("weights/restorer_restormerlike.pt")
     detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-    for i, s in enumerate(find_samples("data/sample_input", "data/sample_gt")):
+    root = "data/sample_input"                  # pro/ beam/ + clean/ labels/ for scoring
+    for i, s in enumerate(find_samples(root, root)):
         r = process_sample(s, restorer, detector, frame_id=i)
         print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
 """

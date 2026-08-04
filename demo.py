@@ -17,9 +17,9 @@ Restore and detect only. Scoring the result against ground truth - detection mAP
 restoration PSNR/SSIM - is evaluate.py's job.
 
 Each run writes output/<run>/ with run_meta.json, detections.csv, the un-annotated
-captures under captures/, the annotated views under frames/ and the 2x2 comparison
-panels under frames_all/. Live runs add calib/ and warp/ - the first frame before
-and after rectification, shown on screen once as well.
+captures under captures/ and the 2x2 comparison panels under frames_all/ - the panel
+already carries the annotated views and the residual. Live runs add calib/ - the
+quad that was found and the first frame before and after rectification.
 """
 
 import argparse
@@ -87,6 +87,12 @@ def build_parser():
                       help="seconds to wait after each calibration flash")
     live.add_argument("--max-frames", type=int, default=0,
                       help="0 = until the clip ends")
+    live.add_argument("--analyse-every", type=int, default=0, metavar="N",
+                      help="restore+detect every Nth projected frame (0 = the densest "
+                           "N that stays perfectly evenly spaced). 1 analyses the most "
+                           "frames but cannot keep every slot, so the spacing gets "
+                           "slightly uneven. The projector plays at the clip's own fps "
+                           "either way.")
 
     add_common_args(p)
     # Only needed when the checkpoint is a bare state_dict with no embedded config.
@@ -102,15 +108,16 @@ def main(argv=None):
     box_filter = box_filter_kwargs(args, info["detection_config"])
     out_dir = run_dir(args.output, args.name)
 
-    panel_w, panel_h = panel_size(*restorer.input_size)
     want_video = args.live or args.video
+    video_size = panel_size(*info["input_size"])
 
     with RunRecorder(out_dir, save_every=args.save_every, frame_kinds=kinds,
                      jpeg_quality=args.jpeg_quality,
                      max_saved_frames=args.max_saved_frames,
-                     video_size=(panel_w, panel_h) if want_video else None) as rec:
+                     video_size=video_size if want_video else None) as rec:
         rec.set(mode="live" if args.live else "offline",
-                restorer=restorer.info(), detector=detector.info(),
+                restorer=restorer.info(),
+                detector=detector.info(),
                 box_filter=box_filter, device=info["device"],
                 recording={"save_every": args.save_every, "frame_kinds": list(kinds),
                            "jpeg_quality": args.jpeg_quality,
@@ -119,7 +126,8 @@ def main(argv=None):
         print(f"output: {out_dir}")
 
         if args.live:
-            summary = _run_live(args, restorer, detector, rec, box_filter)
+            summary = _run_live(args, restorer, detector, rec, box_filter,
+                                info["input_size"])
         else:
             summary = _run_offline(args, restorer, detector, rec, box_filter, kinds)
 
@@ -129,10 +137,10 @@ def main(argv=None):
     return 0
 
 
-def _run_live(args, restorer, detector, rec, box_filter):
+def _run_live(args, restorer, detector, rec, box_filter, input_size):
     import cv2
 
-    from projector_distortion.pipeline.live import run_live
+    from projector_distortion.pipeline.live import run_live  # noqa: F401
 
     bg_path = resolve_path(args.background)
     background = cv2.imread(bg_path) if bg_path else None
@@ -143,14 +151,16 @@ def _run_live(args, restorer, detector, rec, box_filter):
     if not clip or not os.path.exists(clip):
         raise SystemExit(f"projector clip not found: {args.clip}")
 
+    common = dict(background=background, camera=args.camera, screen=args.screen,
+                  max_frames=args.max_frames, cam_fps=args.cam_fps,
+                  cam_size=(args.cam_width, args.cam_height),
+                  cam_backend=args.cam_backend, detector_name=detector.name)
+
     return run_live(
-        clip, restorer, detector, rec, background=background,
-        camera=args.camera, screen=args.screen, offset=args.offset,
+        clip, restorer, detector, rec, offset=args.offset,
         manual_calib=args.manual_calib, debug_view=args.debug_view,
-        max_frames=args.max_frames,
-        cam_size=(args.cam_width, args.cam_height), cam_fps=args.cam_fps,
-        cam_backend=args.cam_backend, calib_settle=args.calib_settle,
-        detector_name=detector.name, **box_filter)
+        calib_settle=args.calib_settle, analyse_every=args.analyse_every,
+        **common, **box_filter)
 
 
 def _run_offline(args, restorer, detector, rec, box_filter, kinds):
@@ -160,7 +170,7 @@ def _run_offline(args, restorer, detector, rec, box_filter, kinds):
     if not input_root or not os.path.isdir(input_root):
         raise SystemExit(
             f"input folder not found: {args.input}\n"
-            f"    expected pro/ and beam/ subfolders; see data/README.md")
+            f"    expected pro/ and beam/ subfolders; see data/README_data.md")
 
     pro_dir = os.path.join(input_root, "pro")
     n_pairs = len(os.listdir(pro_dir)) if os.path.isdir(pro_dir) else 0
@@ -176,9 +186,14 @@ def _report(meta, summary, detector, out_dir):
     print("\n" + "=" * 70)
     n = summary.get("images") or summary.get("frames_processed") or 0
     print(f"done: {n} frame(s) in {meta.get('elapsed_sec')}s")
-    if "fps_end_to_end" in summary:
-        print(f"  {summary['fps_end_to_end']:.1f} fps end to end, "
-              f"{summary.get('frames_dropped', 0)} dropped")
+    if "fps_projector" in summary:
+        print(f"  projector {summary['fps_projector']:.1f} fps "
+              f"({summary['frames_projected']} frames) | "
+              f"analysis {summary['fps_end_to_end']:.1f} fps "
+              f"(every {summary.get('analyse_every', 1)} frame(s): "
+              f"{summary['frames_processed']} analysed, "
+              f"{summary.get('frames_skipped', 0)} skipped, "
+              f"{summary.get('frames_dropped', 0)} dropped)")
     print(f"  restore {summary.get('avg_restore_ms')} ms/frame | "
           f"detect {summary.get('avg_detect_ms')} ms/frame | "
           f"mean |residual| {summary.get('residual_mean')}")
@@ -194,10 +209,12 @@ def _report(meta, summary, detector, out_dir):
               + (f"   {delta:+.1f}%" if delta is not None else ""))
 
     print(f"  saved {meta.get('saved_frames')} frame set(s), {meta.get('image_mb')} MB"
-          + (f" + {meta['video_mb']} MB video" if "video_mb" in meta else ""))
+          + (f" + {meta['video_mb']} MB video" if "video_mb" in meta else "")
+          + (f"   ({summary['writes_dropped']} frame(s) outran the writer)"
+             if summary.get("writes_dropped") else ""))
     print(f"  -> {out_dir}")
-    print("     run_meta.json | detections.csv | captures/ | frames/ | frames_all/"
-          + (" | calib/ | warp/" if meta.get("mode") == "live" else ""))
+    print("     run_meta.json | detections.csv | captures/ | frames_all/"
+          + (" | calib/" if meta.get("mode") == "live" else ""))
     print("     score it with:  python evaluate.py")
 
 

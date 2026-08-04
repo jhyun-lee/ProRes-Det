@@ -6,7 +6,7 @@ Live pipeline: webcam + projector rig. Needs real hardware.
     the frame shown --offset frames ago -> `beam`
     restore(pro, beam) -> detect both -> 2x2 panel + recorder
 
-The first frame's warp input and output are written to warp/ and shown once, so the
+The first frame's warp input and output are written to calib/ and shown once, so the
 rectification the whole run depends on can be checked without stopping it.
 
 On Windows, cv2.setWindowProperty(WND_PROP_FULLSCREEN) snaps the window back to the
@@ -15,7 +15,9 @@ has no effect. Geometry goes through the Win32 API instead.
 """
 
 import ctypes
+import math
 import queue
+import statistics
 import sys
 import threading
 import time
@@ -40,13 +42,36 @@ CLICK_ORDER = "TL -> TR -> BR -> BL"
 CAM_BACKENDS = {"auto": None, "any": cv2.CAP_ANY, "dshow": cv2.CAP_DSHOW,
                 "msmf": cv2.CAP_MSMF, "v4l2": cv2.CAP_V4L2}
 
-# Frames allowed inside the restore/detect worker at once. 1 would make the handoff
-# synchronous again; more only adds latency between the projector and the panel.
-MAX_IN_FLIGHT = 2
+# Frames allowed to be waiting on the worker. Deep enough to ride out a slow frame,
+# shallow enough that the panel never trails the projector by much.
+MAX_IN_FLIGHT = 3
+
+# Finished frames allowed to be waiting on the writer. Disk is an order of magnitude
+# faster than the models, so this only has to absorb a stalled write, not a backlog.
+MAX_PENDING_WRITES = 8
+
+# Analysed frames spent measuring the machine before the stride is fixed. Re-tuning
+# it mid-run is what makes the analysed video uneven, so it is set once and kept.
+# The first frames are discarded outright: CUDA autotuning makes frame 1 ~50x the
+# steady-state cost, and a median over the rest ignores whatever else stalls once.
+STRIDE_WARMUP = 12
+STRIDE_DISCARD = 2
 
 
 def _step(msg):
     print(f"   . {msg}", flush=True)
+
+
+def _hold_until(deadline):
+    """
+    Block until `deadline` (a perf_counter value).
+
+    Plain sleep, deliberately: busy-waiting the last millisecond would hold the GIL
+    and slow the restore/detect thread far more than the timer jitter it removes.
+    """
+    remaining = deadline - time.perf_counter()
+    if remaining > 0:
+        time.sleep(remaining)
 
 
 def order_corners(pts):
@@ -403,19 +428,58 @@ class LiveResult:
     det_restored: List = field(default_factory=list)
     t_restore: float = 0.0
     t_detect: float = 0.0
+    t_worker: float = 0.0
+    write_dropped: bool = False
     clean: Optional[np.ndarray] = None
     gt_boxes: List = field(default_factory=list)
 
 
-def _worker(frame_queue, result_queue, restorer, detector, stop_event,
-            best_per_class=False, min_area=500, min_width=20, min_height=20):
+def _writer(write_queue, recorder, dropped):
+    """
+    Everything that touches the disk, on its own thread.
+
+    The jpegs, the mp4 encode and the csv row all wait on I/O, and none of it is
+    needed to analyse the next frame. Left in the worker they were charged to
+    `t_worker`, which is what the stride is computed from, so ~9 ms of writing per
+    frame quietly cost analysed frames. Here they overlap with the next restore.
+
+    Only this thread writes frame images, so the recorder needs no lock. `None` ends
+    it, after the queue it has already been given is drained.
+    """
+    while True:
+        item = write_queue.get()
+        if item is None:
+            return
+        result, panel = item
+        try:
+            recorder.write_video(panel)
+            if recorder.should_save(result.frame_id):
+                recorder.save_frame_images(result, panel=panel)
+            recorder.log_detections(result)
+        except Exception as e:                      # a bad frame must not kill the run
+            dropped.append(e)
+            print(f"warning: writing frame {result.frame_id} failed: {e}")
+
+
+def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_event,
+            detector_name="detector", best_per_class=False, min_area=500,
+            min_width=20, min_height=20):
+    """
+    Restore, detect and build the panel - all off the main thread.
+
+    Doing this between two projector frames is what used to pull playback below the
+    clip's fps. The main loop is left with `cv2.imshow` and the counters; the disk
+    goes to `_writer`. The panel is built here rather than there because the main
+    loop displays it.
+    """
     from ..utils.visualize import draw_detections
 
     while not stop_event.is_set():
         try:
-            frame_id, distorted, beam = frame_queue.get(timeout=0.5)
+            frame_id, distorted, beam, cam_frame = frame_queue.get(timeout=0.5)
         except queue.Empty:
             continue
+        started = time.perf_counter()
 
         t0 = time.perf_counter()
         restored_clean, residual, residual_mean = restorer.restore_full(distorted, beam)
@@ -443,8 +507,17 @@ def _worker(frame_queue, result_queue, restorer, detector, stop_event,
             det_distorted=det_c, det_restored=det_r,
             t_restore=t_restore, t_detect=t_detect,
         )
+        panel = build_panel(result, detector_name)
+        result.t_worker = time.perf_counter() - started
         try:
-            result_queue.put(result, timeout=1.0)
+            write_queue.put_nowait((result, panel))
+        except queue.Full:
+            # Never stall the models on the disk: the run keeps its numbers, the
+            # frame just does not reach result.mp4 or the jpgs.
+            result.write_dropped = True
+
+        try:
+            result_queue.put((result, panel), timeout=1.0)
         except queue.Full:
             continue
 
@@ -463,7 +536,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
              screen=1, offset=6, manual_calib=False, debug_view=False,
              max_frames=0, cam_size=(1280, 960), cam_fps=30, cam_backend="auto",
              calib_settle=0.8, best_per_class=False, min_area=500, min_width=20,
-             min_height=20, detector_name="detector") -> Dict:
+             min_height=20, detector_name="detector", analyse_every=0) -> Dict:
     """
     Drive the rig until the clip ends or 'q' is pressed. Returns a summary dict.
 
@@ -486,7 +559,11 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         raise RuntimeError(f"cannot open the projector clip: {video}")
     clip_frames = int(clip.get(cv2.CAP_PROP_FRAME_COUNT))
     clip_fps = clip.get(cv2.CAP_PROP_FPS) or 30
-    print(f"clip: {clip_frames} frames @ {clip_fps:.0f}fps")
+    clip_size = (int(clip.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                 int(clip.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    print(f"clip: {clip_frames} frames @ {clip_fps:.0f}fps, "
+          f"{clip_size[0]}x{clip_size[1]} (projected as-is; "
+          f"the model sees {out_size[0]}x{out_size[1]})")
 
     cam = open_webcam(camera, cam_backend, cam_size[0], cam_size[1], cam_fps)
     if cam is None:
@@ -542,62 +619,76 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
                    round(cam.get(cv2.CAP_PROP_FPS), 1)],
     }, projector={
         "clip": str(video), "frames": clip_frames, "fps": round(clip_fps, 2),
+        "projected_size": list(clip_size), "model_input_size": list(out_size),
         "screen_index": screen, "offset_frames": offset,
         "monitor": dict(zip(monitor._fields, monitor)) if monitor else None,
     })
 
-    _step("starting the restore/detect worker ...")
-    frame_queue, result_queue = queue.Queue(maxsize=10), queue.Queue(maxsize=10)
+    _step("starting the restore/detect worker and the writer ...")
+    frame_queue = queue.Queue(maxsize=MAX_IN_FLIGHT)
+    result_queue = queue.Queue(maxsize=MAX_IN_FLIGHT + 2)
+    write_queue = queue.Queue(maxsize=MAX_PENDING_WRITES)
+    write_errors = []
     stop_event = threading.Event()
+    writer = threading.Thread(target=_writer, daemon=True,
+                              args=(write_queue, recorder, write_errors))
+    writer.start()
     worker = threading.Thread(
         target=_worker, daemon=True,
-        args=(frame_queue, result_queue, restorer, detector, stop_event),
-        kwargs={"best_per_class": best_per_class, "min_area": min_area,
-                "min_width": min_width, "min_height": min_height})
+        args=(frame_queue, result_queue, write_queue, restorer, detector, stop_event),
+        kwargs={"detector_name": detector_name, "best_per_class": best_per_class,
+                "min_area": min_area, "min_width": min_width,
+                "min_height": min_height})
     worker.start()
 
     place_window(screen, announce=False)
     # Pre-roll so `beam` lags `pro` by `offset` frames, compensating rig latency.
     pro_buffer = [background_small.copy() for _ in range(max(0, offset))]
 
-    frame_count = processed = dropped = 0
+    frame_count = processed = dropped = skipped = writes_dropped = 0
     totals = {"distorted": 0, "restored": 0}
     sums = {"residual": 0.0, "t_restore": 0.0, "t_detect": 0.0}
-    # The worker holds a frame while the main thread captures the next one, so the
-    # camera read, the warp and the panel encode overlap with restore+detect instead
-    # of queueing behind them. Two is enough to cover the gap and keeps the panel
-    # at most one frame behind what the projector is showing.
-    in_flight, pending_raw = 0, {}
+    # Analysis runs behind the projector, never in front of it: the loop hands a frame
+    # to the worker only when it has room and moves on regardless, so restore+detect
+    # never holds up the clip. MAX_IN_FLIGHT frames may be under analysis at once.
+    in_flight = 0
     stop = False
+    # Analyse every Nth frame rather than "whenever the worker is free": an even
+    # spacing is what makes result.mp4 play like the clip, only at a lower rate.
+    # Auto measures the machine for STRIDE_WARMUP frames, then holds that stride.
+    stride, auto_stride, samples = max(1, analyse_every), analyse_every <= 0, []
 
-    def consume(result):
-        """Record and display one finished frame. Returns False when 'q' was hit."""
-        nonlocal processed
-        panel = build_panel(result, detector_name)
-        recorder.write_video(panel)
-        if recorder.should_save(result.frame_id):
-            recorder.save_frame_images(result, panel=panel,
-                                       raw_frame=pending_raw.get(result.frame_id))
-        recorder.log_detections(result)
-        pending_raw.pop(result.frame_id, None)
-
+    def consume(result, panel):
+        """Show one finished frame and fold it into the counters; the writer stores it."""
+        nonlocal processed, stride, auto_stride, writes_dropped
+        writes_dropped += bool(result.write_dropped)
         totals["distorted"] += len(result.det_distorted)
         totals["restored"] += len(result.det_restored)
         sums["residual"] += result.residual_mean
         sums["t_restore"] += result.t_restore
         sums["t_detect"] += result.t_detect
         processed += 1
+
+        if auto_stride and result.t_worker:
+            samples.append(result.t_worker)
+            if len(samples) >= STRIDE_WARMUP:
+                # 20% headroom: a stride the worker only just sustains misses its
+                # slot whenever a frame runs long, and a miss is a visible hitch.
+                typical = statistics.median(samples[STRIDE_DISCARD:])
+                stride = max(1, math.ceil(clip_fps * typical * 1.2))
+                auto_stride = False
+                print(f"analysing every {stride} frame(s) = "
+                      f"{clip_fps / stride:.1f} of {clip_fps:.0f} fps "
+                      f"({typical * 1000:.0f} ms per frame).", flush=True)
         if processed == 1:
             print(f"first frame through the pipeline in {time.time() - t0:.1f}s "
                   f"(includes warmup).", flush=True)
-
         cv2.imshow(PANEL, panel)
-        return (cv2.waitKey(1) & 0xFF) != ord("q")
 
-    def drain(block_until):
-        """Take finished frames until only `block_until` are still in the worker."""
-        nonlocal in_flight, dropped, stop
-        while in_flight > block_until or (in_flight and not result_queue.empty()):
+    def collect(block=False):
+        """Take whatever the worker has finished. Only the final drain blocks."""
+        nonlocal in_flight, dropped
+        while in_flight and (block or not result_queue.empty()):
             try:
                 result = result_queue.get(timeout=10)
             except queue.Empty:
@@ -606,13 +697,13 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
                 in_flight = 0
                 return
             in_flight -= 1
-            if not consume(result):
-                print("stopped by user.")
-                stop = True
-                return
+            consume(*result)
 
     print("running - press 'q' in the Combined_View window to stop.", flush=True)
     t0 = time.time()
+    # The projector must keep the clip's own cadence; analysis throughput is separate.
+    frame_interval = 1.0 / max(clip_fps, 1e-6)
+    next_frame_at = time.perf_counter()
 
     try:
         while not stop:
@@ -630,7 +721,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
                 # Once per run: what the camera saw and what the warp made of it.
                 written, figure = recorder.save_warp_pair(cam_frame, distorted, points)
                 print(f"first-frame warp: {len(written)} image(s) -> "
-                      f"{recorder.warp_dir}")
+                      f"{recorder.calib_dir}")
                 cv2.imshow(WARP_WINDOW, figure)
                 cv2.waitKey(1)
 
@@ -638,9 +729,11 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
             if not ok_p:
                 print("projector clip ended.")
                 break
-            pro_frame = resize(pro_frame, out_size)
 
-            pro_buffer.append(pro_frame)
+            # Project the clip at its own resolution and keep the model's copy
+            # separate. Shrinking before projecting would put the network's input
+            # size on the screen, only for the fullscreen window to blow it back up.
+            pro_buffer.append(resize(pro_frame, out_size))
             cv2.imshow(WINDOW, pro_frame)
             if debug_view:
                 cv2.imshow(DEBUG_WINDOW,
@@ -648,24 +741,39 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
                                      f"pre-warp camera  frame {frame_count}"))
 
             beam = pro_buffer.pop(0)
-            try:
-                frame_queue.put((frame_count, distorted, beam), timeout=1.0)
-            except queue.Full:
-                dropped += 1
-                frame_count += 1
-                continue
-            pending_raw[frame_count] = cam_frame
-            in_flight += 1
+            if frame_count % stride == 0:
+                try:
+                    # Hand over every on-stride frame, letting the queue absorb a
+                    # worker that ran long. Gating on "is the worker idle" instead
+                    # would drop whole slots and put a hitch in the analysed video.
+                    frame_queue.put_nowait((frame_count, distorted, beam, cam_frame))
+                    in_flight += 1
+                except queue.Full:
+                    skipped += 1        # stride is still catching up; let it go by
+            else:
+                skipped += 1
             frame_count += 1
 
-            drain(block_until=MAX_IN_FLIGHT - 1)
+            collect()
+            if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                print("stopped by user.")
+                break
 
-        drain(block_until=0)        # the clip ended; finish what the worker still holds
+            # Absolute deadlines, so a slow iteration is absorbed rather than added
+            # to the next one. A camera that already paces the loop never sleeps here.
+            _hold_until(next_frame_at)
+            next_frame_at = max(next_frame_at + frame_interval, time.perf_counter())
+
+        collect(block=True)     # the clip ended; finish what the worker still holds
     except KeyboardInterrupt:
         print("\ninterrupted.")
     finally:
         stop_event.set()
         worker.join(timeout=3)
+        # The writer holds the only copy of frames that are already analysed, so it
+        # is drained rather than cut off - the recorder is closed right after this.
+        write_queue.put(None)
+        writer.join(timeout=30)
         clip.release()
         cam.release()
         cv2.destroyAllWindows()
@@ -673,8 +781,14 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     n = max(processed, 1)
     elapsed = max(time.time() - t0, 1e-6)
     summary = {
+        "frames_projected": frame_count,
         "frames_processed": processed,
+        "frames_skipped": skipped,
         "frames_dropped": dropped,
+        "writes_dropped": writes_dropped,
+        "write_errors": len(write_errors),
+        "analyse_every": stride,
+        "fps_projector": round(frame_count / elapsed, 2),
         "fps_end_to_end": round(processed / elapsed, 2),
         "detections_total": totals,
         "detections_per_frame": {k: round(v / n, 3) for k, v in totals.items()},

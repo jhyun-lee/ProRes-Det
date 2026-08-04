@@ -8,17 +8,22 @@
 ```
 data/
 ├── collect.py              프로젝터+웹캠으로 직접 데이터셋 수집
-├── sample_input/           demo.py / evaluate.py / train.py 입력
+├── record.py               클립 투사 + 카메라 화면 녹화 (모델 불필요)
+├── sample_input/           demo / evaluate / train 의 입력 **과** 정답
 │   ├── pro/    projected_<oriId>_<beamId>.jpg   22장, 640×360
-│   └── beam/   output_video_<beamId>.jpg        22장, 크기 혼재
-├── sample_gt/              정답 (없어도 demo 는 동작, 점수만 안 나옴)
+│   ├── beam/   output_video_<beamId>.jpg        22장, 크기 혼재
 │   ├── clean/  Ori<oriId>.jpg      10장, 640×360    ← 학습 타겟 / PSNR·SSIM 기준
 │   └── labels/ Ori<oriId>.txt      10장, 박스 107개  ← mAP 기준 (YOLO 포맷)
-└── live/                   demo.py --live 입력
-    ├── BeamVideo.mp4       프로젝터로 재생할 클립
-    │                       5,858 프레임 @30fps = 3.3분, 854×480, 55 MiB
-    └── BaseBackGround.jpg  캘리브레이션 중 띄울 배경, 1280×960
+├── live/                   demo.py --live 입력
+│   ├── BeamVideo.mp4       프로젝터로 재생할 클립
+│   │                       5,858 프레임 @30fps = 3.3분, 854×480, 55 MiB
+│   └── BaseBackGround.jpg  캘리브레이션 중 띄울 배경, 1280×960
+├── sample_video/           짧은 클립 2개. BeamVideo 대신 쓸 수 있다
+└── recordings/             record.py 출력 위치 (git 제외)
 ```
+
+`clean/` 과 `labels/` 이 `sample_input/` 안에 있으므로 `--input` 과 `--gt` 가 같은 경로를
+받는다. 둘 다 선택 사항이라 `clean/` 이 없어도 실행은 되고, 채점만 안 된다.
 
 이미지 크기는 서로 맞출 필요 없다. 파이프라인이 전부 모델의 `input_size`(기본 640×360)로
 리사이즈한다. `beam/` 에 854×480 과 1280×720 이 섞여 있어도 별도 처리가 없는 이유다.
@@ -32,8 +37,8 @@ projected_0409001429_0404023332_294_75.jpg
           └───┬────┘ └──────┬───────┘
             oriId         beamId
 
-  → sample_gt/clean/Ori0409001429.jpg                     (정답 화면)
-  → sample_gt/labels/Ori0409001429.txt                    (검출 정답)
+  → sample_input/clean/Ori0409001429.jpg                  (정답 화면)
+  → sample_input/labels/Ori0409001429.txt                 (검출 정답)
   → sample_input/beam/output_video_0404023332_294_75.jpg  (프로젝터가 쏜 프레임)
 ```
 
@@ -64,7 +69,7 @@ projected_0409001429_0404023332_294_75.jpg
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/sample_input --gt data/sample_gt      # flat
+python demo.py --input data/sample_input --gt data/sample_input   # flat
 python demo.py --input /path/to/WarpData_0520                     # research 자동 인식
 ```
 
@@ -140,6 +145,21 @@ python train.py --data-root data/collected_0803
 
 옵션 전체 표: [README_running.ko.md](../README_running.ko.md)
 
+## 녹화만 — `record.py`
+
+`collect.py` 는 *데이터셋*을 만든다 — 정면화되고 id 로 짝지어진 정지 이미지 쌍.
+`record.py` 는 *영상*을 만든다 — 클립을 투사하면서 카메라 화면을 mp4 하나로 녹화한다.
+복원도 검출도 없고 가중치도 안 읽는다.
+
+```bash
+python data/record.py --screen 2 --seconds 30
+python data/record.py --warp --rec-size 640 360     # 정면화된 화면을 녹화
+```
+
+출력은 `data/recordings/rec_<MMDDHHMMSS>.mp4` 와 실제 사용 설정·실측 속도가 담긴 `.json`.
+해당 디렉토리는 git 에서 제외된다. 체크포인트가 나오기 전에 왜곡 원본을 확보하거나 리그
+점검용으로 쓴다. 옵션 전체 표: [README_running.ko.md](../README_running.ko.md)
+
 ## 실데이터로 교체
 
 ```bash
@@ -161,12 +181,9 @@ python train.py --data-root /mnt/.../0_ImageData/1_WarpData_0520 --epochs 30
 
 ## 용량
 
-`data/` 는 59 MiB 이고 거의 전부가 `data/live/BeamVideo.mp4`(55 MiB)다.
-`--live` 를 안 쓰면 그 파일은 지워도 된다.
-
-> `data/sample_input/clean` 은 다른 머신의 절대 경로를 가리키는 **깨진 심볼릭 링크**다.
-> 현재 코드는 무시하지만 `os.walk('data')` 같은 단순 순회는 여기서 깨진다.
-> 정리 권장: `git rm data/sample_input/clean`
+git 에 포함된 `data/` 는 82 MiB 이고 거의 전부 영상이다 — `live/BeamVideo.mp4`(55 MiB)
+와 `sample_video/`(23 MiB). 데이터셋 자체는 4.4 MiB. `--live` 나 `record.py` 를 안 쓰면
+클립은 지워도 된다.
 
 ---
 

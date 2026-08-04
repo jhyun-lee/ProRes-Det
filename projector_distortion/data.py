@@ -1,7 +1,7 @@
 """
 Sample discovery, ground truth loading, and the training dataset.
 
-Filenames tie the views of one moment together (see data/README.md):
+Filenames tie the views of one moment together (see data/README_data.md):
 
     pro    projected_<oriId>_<beamId>.jpg
     beam   output_video_<beamId>.jpg
@@ -12,6 +12,7 @@ Filenames tie the views of one moment together (see data/README.md):
 'research' (ProjectorImage/ BeamImage/ OriginalImage/) are auto-detected.
 """
 
+import glob
 import os
 import random
 from dataclasses import dataclass
@@ -134,35 +135,74 @@ def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
     return samples[:limit] if limit else samples
 
 
-def index_triplets(root, clean_root=None, sample=0, seed=42) -> List[List[str]]:
+def images_under(patterns) -> Dict[str, str]:
+    """
+    Every image under one or more directories; a glob may stand for several.
+
+    Real captures arrive date-partitioned (`WarpData_0520_pro`, `..._0529_pro`, ...)
+    and the beam frames often sit under a root of their own, so a training set is
+    rarely one folder.
+    """
+    if not patterns:
+        return {}
+    if isinstance(patterns, (str, os.PathLike)):
+        patterns = [patterns]
+
+    found = {}
+    for pattern in patterns:
+        matches = sorted(d for d in glob.glob(str(pattern)) if os.path.isdir(d))
+        for directory in matches or ([str(pattern)] if os.path.isdir(str(pattern))
+                                     else []):
+            found.update(_images_in(directory))
+    return found
+
+
+def index_triplets(root=None, clean_root=None, sample=0, seed=42,
+                   pro=None, beam=None, clean=None) -> List[List[str]]:
     """
     [[pro, clean, beam], ...] for training.
 
-    `clean_root` overrides the clean directory implied by the layout, which is how
-    the bundled sample set trains: its clean targets live under data/sample_gt/.
+    Either pass `root` and let the layout be detected, or name the three directories
+    outright - `pro` / `beam` / `clean` each accept a directory, a glob, or a list.
+    `clean_root` overrides only the clean side of a detected layout.
     """
-    layout, dirs = resolve_dirs(root)
-    clean_dir = clean_root or dirs["clean"]
-    pro_files = _images_in(dirs["pro"])
-    beam_by_id = {beam_id(k): v for k, v in _images_in(dirs["beam"]).items()}
-    clean_by_id = {ori_id(k): v for k, v in _images_in(clean_dir).items()}
-    if not clean_by_id:
-        raise FileNotFoundError(
-            f"training needs clean targets; none found in {clean_dir}")
+    if pro or beam or clean:
+        source = f"pro={pro}"
+        pro_files = images_under(pro)
+        beam_files = images_under(beam)
+        clean_files = images_under(clean)
+    else:
+        layout, dirs = resolve_dirs(root)
+        source = f"{root} (layout: {layout})"
+        pro_files = _images_in(dirs["pro"])
+        beam_files = _images_in(dirs["beam"])
+        clean_files = _images_in(clean_root or dirs["clean"])
 
-    triplets = []
+    if not clean_files:
+        raise FileNotFoundError(f"training needs clean targets; none found for {source}")
+    beam_by_id = {beam_id(k): v for k, v in beam_files.items()}
+    clean_by_id = {ori_id(k): v for k, v in clean_files.items()}
+
+    triplets, no_beam, no_clean = [], 0, 0
     for fname, pro_path in pro_files.items():
-        clean = clean_by_id.get(ori_id(fname))
-        beam = beam_by_id.get(beam_id(fname))
-        if clean and beam:
-            triplets.append([pro_path, clean, beam])
+        c = clean_by_id.get(ori_id(fname))
+        b = beam_by_id.get(beam_id(fname))
+        if c and b:
+            triplets.append([pro_path, c, b])
+        elif not b:
+            no_beam += 1
+        else:
+            no_clean += 1
     if not triplets:
-        raise RuntimeError(f"no complete triplets under {root} (layout: {layout})")
+        raise RuntimeError(f"no complete triplets for {source}")
 
     triplets.sort()
     if sample and len(triplets) > sample:
         triplets = random.Random(seed).sample(triplets, sample)
-    print(f"data: {len(triplets)} triplets from {root} (layout: {layout})")
+    print(f"data: {len(triplets):,} triplets of {len(pro_files):,} pro image(s) "
+          f"from {source}")
+    if no_beam or no_clean:
+        print(f"      skipped {no_beam:,} without a beam, {no_clean:,} without a clean")
     return triplets
 
 

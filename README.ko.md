@@ -30,12 +30,43 @@ pip install -e ".[train]"       # + pytorch-msssim 등 → train.py
 pip install -e ".[live]"        # + screeninfo        → --live (Windows 는 불필요)
 pip install -e ".[test]"        # + pytest
 pip install -e ".[all]"         # 전부
+pip install -e ".[all]" -r requirements-cuda.txt    # 전부 + CUDA torch (아래 참고)
 ```
 
 > 대괄호는 셸에 따라 glob 문자로 해석된다(zsh 등). 따옴표를 씌우면 bash / zsh /
 > PowerShell / cmd 어디서나 동작한다.
 
 기본 의존성은 `torch torchvision opencv-python numpy PyYAML tqdm`.
+
+### GPU
+
+**`.[all]` 만 실행하면 Windows 에서는 CPU 전용 torch 가 깔린다.** PyPI 기본 `torch` 휠에
+Windows용 CUDA 가 없기 때문이다. 전부 정상 동작하고 증상은 하나뿐이다 — 복원이 프레임당
+13 ms 대신 380 ms 걸린다. 같은 명령에 `requirements-cuda.txt` 를 붙이면 CUDA 빌드까지 한 번에:
+
+```bash
+pip install -e ".[all]" -r requirements-cuda.txt
+```
+
+extra(`.[cuda]`) 로는 안 된다 — 패키지가 "어느 인덱스에서 받아라" 를 지정할 방법이 없다.
+그래서 인덱스 지정과 버전 핀을 저 파일에 넣었다. `cu128` 은 RTX 50 시리즈(Blackwell)와
+12.8 드라이버가 지원하는 구형 카드까지 커버한다. 더 오래된 드라이버면 파일 안의 `cu128` 을
+`cu121` / `cu118` 로 바꾸면 된다. 실제로 뭐가 깔렸는지 확인:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+# 2.8.0+cu128 True      <- 정상
+# 2.8.0+cpu   False     <- CPU 전용 빌드. -r requirements-cuda.txt 붙여서 재설치
+```
+
+모든 진입점이 첫 줄에 해석된 device 를 출력하므로, 조용히 CPU 로 떨어진 실행은 바로 티가 난다.
+
+```
+device: cuda - NVIDIA GeForce RTX 5090, torch 2.8.0+cu128
+device: cpu - torch 2.8.0+cpu is a CPU-only build, so restoration runs ~25x slower.
+```
+
+`--fp16` 은 CUDA 에서만 적용된다. CPU 면 무시된다.
 
 선택 의존성은 모듈 최상단이 아니라 실제로 쓰는 함수 안에서 import 한다.
 `ultralytics` 를 설치하지 않아도 `--detector ssd` 는 그대로 동작하고, `--live` 를 안 쓰면
@@ -65,7 +96,7 @@ ProRes-Det/
 │
 ├── tests/                    pytest 테스트
 ├── weights/                  가중치 3개 (51 MiB) → README_weights.ko.md
-├── data/                     샘플 데이터셋 + collect.py → README_data.ko.md
+├── data/                     샘플 데이터셋 + collect.py / record.py → README_data.ko.md
 └── output/                   실행 결과
 ```
 
@@ -77,6 +108,7 @@ ProRes-Det/
 | [evaluate.py](evaluate.py) | 진입점. GT 가 있는 샘플만 골라 P/R/F1/mAP 와 PSNR/SSIM 계산 후 리포트 저장 |
 | [train.py](train.py) | 진입점. 복원 모델 학습 루프 (L1 + perceptual + SSIM + wavelet 손실) |
 | [data/collect.py](data/collect.py) | 진입점. 리그로 데이터셋 수집: 영상 → beam 프레임, 프로젝터+웹캠 → 촬영본, 정면화 → 정합된 쌍 |
+| [data/record.py](data/record.py) | 진입점. 클립을 투사하면서 카메라 화면을 mp4 하나로 녹화. 가중치 불필요 |
 | [cli.py](projector_distortion/cli.py) | 세 진입점이 공유하는 인자·설정 우선순위·모델 생성 로직 |
 | [config.py](projector_distortion/config.py) | YAML 로드/병합, 프로젝트 루트 기준 경로 해석 |
 | [data.py](projector_distortion/data.py) | 파일명으로 pro/beam/clean/label 을 짝짓고, 학습용 패치 데이터셋 제공 |
@@ -98,13 +130,16 @@ clone 직후 별도 다운로드 없이 바로 실행된다.
 |---|---|---|
 | [data/sample_input/pro/](data/sample_input/pro) | 투사된 화면을 찍은 이미지 22장 | 모델 입력 ch 0:3 |
 | [data/sample_input/beam/](data/sample_input/beam) | 프로젝터가 쏜 원본 프레임 22장 | 모델 입력 ch 3:6 |
-| [data/sample_gt/clean/](data/sample_gt/clean) | 투사광 없는 정답 화면 10장 | 학습 타겟 / PSNR·SSIM 기준 |
-| [data/sample_gt/labels/](data/sample_gt/labels) | YOLO 포맷 검출 라벨 10개 | mAP 기준 |
+| [data/sample_input/clean/](data/sample_input/clean) | 투사광 없는 정답 화면 10장 | 학습 타겟 / PSNR·SSIM 기준 |
+| [data/sample_input/labels/](data/sample_input/labels) | YOLO 포맷 검출 라벨 10개 | mAP 기준 |
 | [data/live/BeamVideo.mp4](data/live/BeamVideo.mp4) | 프로젝터로 재생할 클립 (3.3분) | `--live` 입력 |
 | [data/live/BaseBackGround.jpg](data/live/BaseBackGround.jpg) | 캘리브레이션 중 띄울 배경 | `--live` 입력 |
+| [data/sample_video/](data/sample_video) | 짧은 클립 2개. BeamVideo 대신 쓸 수 있다 | `data/record.py --clip` |
 
-파일명 규약(`pro` ↔ `beam` ↔ `clean` 을 id 로 짝짓는 방식)과 실데이터 교체 방법은
-[data/README_data.ko.md](data/README_data.ko.md), 가중치 정보는 [weights/README_weights.ko.md](weights/README_weights.ko.md).
+입력과 정답이 같은 폴더에 있으므로 `--input` 과 `--gt` 둘 다 `data/sample_input` 이
+기본값이다. 파일명 규약(`pro` ↔ `beam` ↔ `clean` 을 id 로 짝짓는 방식)과 실데이터 교체
+방법은 [data/README_data.ko.md](data/README_data.ko.md), 가중치 정보는
+[weights/README_weights.ko.md](weights/README_weights.ko.md).
 
 ---
 
@@ -116,6 +151,7 @@ python evaluate.py                # 복원 전/후 mAP + PSNR/SSIM → output/Ev
 python train.py --epochs 30       # 복원 모델 재학습            → runs/<tag>/
 python demo.py --live --screen 2  # 웹캠 + 프로젝터 리그         → output/<타임스탬프>/
 python data/collect.py capture    # 직접 데이터 수집 (4단계)     → data/collected_<MMDD>/
+python data/record.py --screen 2  # 모델 없이 투사 + 녹화        → data/recordings/
 ```
 
 앞의 두 개는 `weights/` 에 체크포인트만 있으면 인자 없이 바로 돈다.

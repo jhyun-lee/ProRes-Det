@@ -17,8 +17,7 @@ RESTORER_W = os.path.join(WEIGHTS, "restorer_restormerlike.pt")
 YOLO_W = os.path.join(WEIGHTS, "detector_yolo11s.pt")
 SSD_W = os.path.join(WEIGHTS, "detector_ssdlite.pth")
 
-SAMPLE_INPUT = os.path.join(DATA, "sample_input")
-SAMPLE_GT = os.path.join(DATA, "sample_gt")
+SAMPLE_INPUT = os.path.join(DATA, "sample_input")   # pro/ beam/ + clean/ labels/
 
 
 def _skip_missing(path, what):

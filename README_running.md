@@ -7,6 +7,8 @@ Input, output and options for each entry point. For the one-liners that just wor
 - [`evaluate.py` — score before vs after](#evaluatepy--score-before-vs-after)
 - [`train.py` — retrain the restoration model](#trainpy--retrain-the-restoration-model)
 - [`demo.py --live` — webcam + projector](#demopy---live--webcam--projector)
+- [`data/collect.py` — build a dataset with the rig](#datacollectpy--build-a-dataset-with-the-rig)
+- [`data/record.py` — project and record, no models](#datarecordpy--project-and-record-no-models)
 - [Output format](#output-format)
 
 Flags shared by all three scripts: `--restorer-weights`, `--det-weights`, `--device`,
@@ -32,14 +34,14 @@ anything - `evaluate.py` does that.
 | `--limit N` | Cap how many pairs are processed (0 = all) |
 | `--best-per-class` | Keep only the highest-confidence box per class |
 | `--save-every N` | Image save interval. `0` keeps csv only |
-| `--save-kinds a,b` | Which image kinds to save (default: everything except `beam`) |
+| `--save-kinds a,b` | Which image kinds to save: `distorted`, `restored`, `panel` (default: all three) |
 | `--max-saved-frames N` | Hard cap on how many frame sets land on disk |
 | `--jpeg-quality N` | JPEG quality for saved images (default 92) |
 | `--video` | Also write the 2×2 panels as `result.mp4` |
 
 ```bash
 python demo.py --detector ssd --conf 0.4
-python demo.py --detector none --save-kinds restored,residual
+python demo.py --detector none --save-kinds restored
 python demo.py --input /path/to/pairs --name my_run
 ```
 
@@ -59,7 +61,7 @@ Only samples that have both `clean` and `label` are scored.
 | | Default path | Option to change it |
 |---|---|---|
 | Input | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
-| GT | `data/sample_gt/` (`clean/` + `labels/`) | `--gt <dir>` |
+| GT | `data/sample_input/` (`clean/` + `labels/`) | `--gt <dir>` |
 | Output | `output/Eval_<input dataset>/`<br>`report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv` | `--output <dir>` · `--name <name>` |
 
 | Option | Meaning |
@@ -101,7 +103,7 @@ Only complete `pro` / `beam` / `clean` triplets are used.
 | | Default path | Option to change it |
 |---|---|---|
 | Input | `data/sample_input/` (`pro/` + `beam/`) | `--data-root <dir>` |
-| Target | `data/sample_gt/clean/` — **required** | `--gt <dir>` |
+| Target | `data/sample_input/clean/` — **required** | `--gt <dir>` |
 | Output | `runs/<MMDD_HHMM>_<epochs>ep_<tag>/`<br>`restorer_<tag>_best.pt`, `epoch_N.pt`, `loss_log.csv`, `loss_plots.png` | `--out <dir>` |
 
 Clean targets are searched in this order, and whichever exists is read directly — no
@@ -110,6 +112,9 @@ symlink or copy needed (filename convention: [data/README_data.md](data/README_d
 ```
 --data-root/OriginalImage/   →   --data-root/clean/   →   --gt/clean/
 ```
+
+The bundled set keeps them in `data/sample_input/clean/`, so the second entry hits and
+`--gt` is only needed when the targets live outside `--data-root`.
 
 | Option | Meaning |
 |---|---|
@@ -128,6 +133,29 @@ python train.py --resume runs/0730_1948_30ep_FULL/restorer_FULL_best.pt --epochs
 ```
 
 Needs the training extra: `pip install -e ".[train]"`.
+
+
+Where the training set lives is configured, not hard-coded. `train.data` in
+[configs/restoration.yaml](projector_distortion/configs/restoration.yaml) names the
+three directories; each takes a directory, a glob, or a list, because real captures
+come date-partitioned and the beam frames usually sit under a root of their own:
+
+```yaml
+train:
+  data:
+    pro:   "D:/captures/WarpData_*_pro"
+    clean: "D:/captures/WarpData_*_ori"
+    beam:  "D:/captures/Learning_video_frames"
+```
+
+```bash
+python train.py --epochs 30                      # uses train.data
+python train.py --pro-dir ... --beam-dir ... --clean-dir ...   # override for one run
+```
+
+Clear all three (or pass `--data-root`) to fall back to `data/sample_input`. A `pro`
+with no matching `clean` or `beam` is counted and skipped, not fatal - the run prints
+how many went each way.
 
 ### Ablation
 
@@ -174,6 +202,7 @@ Needs real hardware: a webcam pointed at a screen a projector is throwing to.
 | `--debug-view` | Show the pre-warp camera feed with the quad, live |
 | `--calib-settle F` | Seconds to wait after each calibration flash (default 0.8) |
 | `--max-frames N` | 0 = until the clip ends |
+| `--analyse-every N` | Restore+detect every Nth projected frame (0 = measure the machine and pick N) |
 
 ```bash
 python demo.py --live --screen 2
@@ -182,6 +211,44 @@ python demo.py --live --screen 2 --save-every 30 --debug-view
 
 If you do not know `--screen`, pass anything and run — the detected monitor table is
 printed first. Press `q` in the `Combined_View` window to stop.
+
+
+
+### Playback and analysis run at different rates
+
+The projector plays the clip at the clip's own fps no matter how slow the model is.
+Restore+detect happens on a worker thread over an evenly spaced subset of frames -
+every Nth - so the recorded panel plays like the clip, only at a lower rate. Frames
+between two analysed ones are still projected and captured; they are just not scored.
+
+`--analyse-every 0` (the default) times the first dozen analysed frames, discards the
+CUDA warmup outlier, and fixes N from the median. It is never re-tuned mid-run,
+because changing N is itself what makes the analysed video uneven.
+
+The summary reports both rates:
+
+```
+projector 29.1 fps (450 frames) | analysis 13.0 fps (every 2 frame(s): 201 analysed,
+249 skipped, 0 dropped)
+```
+
+`skipped` is by design - those frames were never meant for the model. `dropped` means
+the worker missed its deadline and is the number to watch.
+
+
+`--analyse-every 0` is the default: the densest N whose spacing stays perfectly even.
+Going denser than that means giving up some of the evenness, which is a call worth
+making deliberately - on a 30 fps clip with a worker that takes ~41 ms per frame:
+
+| `--analyse-every` | projector | analysis | frames analysed | spacing |
+|---|---|---|---|---|
+| `1` | 28.5 fps | 21.8 fps | 76% | 89% even |
+| `2` (auto here) | 28.8 fps | 13.9 fps | 48% | 100% even |
+| `3` | 28.8 fps | 9.4 fps | 32% | 100% even |
+
+`1` analyses 1.6x more frames and barely touches playback; it just cannot hit every
+slot, since a 30 fps budget is 33 ms and the worker needs 41. Pick it when coverage
+matters more than a perfectly smooth panel.
 
 
 ### How calibration works
@@ -200,27 +267,18 @@ Auto-detection falls back to manual clicking on failure; `--manual-calib` starts
 
 | File | What to look for |
 |---|---|
-| `raw_points.jpg` | Do the 4 points sit exactly on the screen corners? |
+| `quad.jpg` | Do the 4 points sit exactly on the screen corners? |
 | `mask.jpg` | Is the white region just the screen, or did lights/windows get caught? |
 | `diff.jpg` | Is the black/white flash difference strong enough? If not, raise `--calib-settle` |
 | `warped.jpg` | Is the rectified result actually square? |
+| `frame_pre.jpg` | the first camera frame of the run, raw |
+| `frame_post.jpg` | that frame rectified, at the model input size |
+| `frame_compare.jpg` | both side by side — also shown once in the `Warp_FirstFrame` window |
 
-### The first frame's warp
-
-`output/<run>/warp/` is written once, when the first camera frame reaches the loop, and
-the comparison figure is put on screen in the `Warp_FirstFrame` window while the run
-carries on.
-
-| File | What it is |
-|---|---|
-| `first_frame_pre_warp.jpg` | the raw camera frame |
-| `first_frame_pre_warp_quad.jpg` | the same frame with the calibration quad on it |
-| `first_frame_post_warp.jpg` | rectified, at the model input size |
-| `first_frame_compare.jpg` | both side by side — the figure shown on screen |
-
-`calib/` comes from the black/white flashes taken *before* the loop; this comes from the
-run itself, so it is the warp the frames were actually rectified with. If the projection
-drifted between calibration and the first frame, this is where it shows.
+The first four come from the black/white flashes taken *before* the loop; the three
+`frame_*` files come from the run itself, so they show the warp the frames were
+actually rectified with. If the projection drifted between calibration and the first
+frame, that is where it shows.
 
 ### Long unattended recording
 
@@ -285,6 +343,90 @@ detected boundary, the sampled points and the rectified result together. Naming,
 
 ---
 
+## `data/record.py` — project and record, no models
+
+The projection half of `--live` with the restore/detect half removed: the clip goes out
+fullscreen at its own fps, the camera feed goes into one mp4, nothing else happens. No
+weights are loaded, so this runs on a machine that has none — useful for capturing raw
+distorted footage before there is a checkpoint, or for proving a rig works end to end.
+
+| | Default | Option to change it |
+|---|---|---|
+| Projected clip | `data/live/BeamVideo.mp4` | `--clip <path>` |
+| Calibration background | `data/live/BaseBackGround.jpg` | `--background <path>` |
+| Output | `data/recordings/rec_<MMDDHHMMSS>.mp4` + a `.json` beside it | `--out <path>` |
+
+| Option | Meaning |
+|---|---|
+| `--screen N` | Monitor the projector is attached to (0 = primary) |
+| `--loop` | Restart the clip instead of stopping at its end |
+| `--seconds F` · `--max-frames N` | Stop conditions (0 = no limit) |
+| `--start-delay F` | Hold the background this long before recording starts |
+| `--warp` | Calibrate once and record the rectified screen, not the raw camera frame |
+| `--rec-size W H` | Resize before encoding (`0 0` keeps the camera resolution) |
+| `--fps F` | mp4 header fps (0 = measure the camera's real rate) |
+| `--codec <fourcc>` | Default `mp4v`; `avc1`, `XVID`, … |
+| `--no-preview` | Skip the small camera preview window |
+
+```bash
+python data/record.py --screen 2 --seconds 30
+python data/record.py --clip data/sample_video/mIni_Video_1.mp4 --loop
+python data/record.py --warp --rec-size 640 360
+```
+
+Recording starts as soon as the window is up — no keypress. `q` stops early, as do the
+end of the clip, `--seconds` and `--max-frames`.
+
+The header fps is **measured**, not requested: webcams routinely deliver something other
+than what they were asked for and report a third number, and a wrong header is exactly
+what makes a recording play back in fast or slow motion. The probe frames are buffered
+until the rate is known, so measuring costs no footage. The `.json` alongside the mp4
+records the clip, camera and monitor settings the run actually used, plus the measured
+rate and how many frames the encoder dropped.
+
+---
+
+
+## Making restoration faster
+
+Restoration is ~46% of a live frame, so it is the first thing to shrink. The network
+is fully convolutional, which makes its working resolution a runtime knob - no
+retraining involved. Measured on the bundled set, `--detectors yolo`:
+
+| `--input-size` | restore | detection mAP | PSNR gain | SSIM gain |
+|---|---|---|---|---|
+| `320 180` | 9.7 ms | 0.9866 | +8.95 dB | +0.163 |
+| `480 270` | 13.4 ms | **1.0000** | +11.32 dB | +0.183 |
+| `640 360` (default) | 20.5 ms | **1.0000** | **+13.17 dB** | **+0.218** |
+| `854 480` | 41.2 ms | 1.0000 | +9.89 dB | +0.145 |
+
+```bash
+python demo.py --live --screen 2 --input-size 480 270
+```
+
+`480 270` costs a third of the restoration time and detection does not notice; only
+the PSNR/SSIM gain narrows. Below that, mAP starts to slip.
+
+Going **above** 640x360 is worse on both counts: the checkpoint was trained on
+180x320 crops resized from 360x640, and 854x480 is far enough outside that scale that
+restoration quality drops while costing twice the time.
+
+`--fp16` and `torch.compile` are not worth reaching for here - fp16 measured 2% slower
+(the network is small enough to be memory-bound, and autocast adds more than it saves)
+and compile needs a Triton build Windows does not ship.
+
+A genuinely smaller network needs retraining. For reference, at 640x360:
+
+| `train.py` flags | params | forward |
+|---|---|---|
+| shipped | 4,184,259 | 13.8 ms |
+| `--base-dim 32` | 1,878,659 | 9.7 ms |
+| `--enc-depth 1,1,1 --dec-depth 1,1,1 --bottleneck-depth 1` | 2,418,837 | 7.3 ms |
+| `--no-ca` | 4,116,147 | 13.1 ms |
+
+Shallower blocks buy more than narrower ones. Dropping channel attention buys 5% and
+is not worth the retrain.
+
 ## Output format
 
 `demo.py` writes one directory per run:
@@ -296,13 +438,10 @@ output/<run_name>/
 ├── captures/          the footage itself, no boxes drawn on it
 │   ├── <id>_distorted.jpg      before restoration
 │   └── <id>_restored.jpg      after restoration
-├── frames/            annotated views, --save-every apart
-│   ├── <id>_distorted_det.jpg  before restoration, with boxes
-│   ├── <id>_restored_det.jpg  after restoration, with boxes
-│   └── <id>_residual.jpg      heatmap of the removed light
 ├── frames_all/        the 2×2 figures, tiles captioned (a)…(d)
-├── calib/             calibration evidence (--live only)
-├── warp/              the first frame before and after rectification (--live only)
+│   └── <id>_panel.jpg          beam · distorted+boxes · restored+boxes · residual
+├── calib/             --live only: the quad, the flashes it came from, and the
+│                       first frame before and after rectification
 └── result.mp4         video of the 2×2 panels (--live or --video)
 ```
 
@@ -310,11 +449,14 @@ output/<run_name>/
 restoration afterwards, or another detector re-run over identical pixels - boxes burnt
 into a jpg cannot be undone.
 
-`beam` is the one kind off by default, since the panel already shows it. Add it with
-`--save-kinds`, which also accepts any other subset:
+Only three kinds are written. The annotated views, the residual heatmap, the beam and
+the raw camera frame used to be saved as separate jpgs under `frames/` as well; they are
+tiles of the panel already, so four extra encodes per frame bought nothing and the
+directory is gone. Drop kinds further with `--save-kinds`:
 
 ```bash
-python demo.py --save-kinds distorted,restored,panel,beam
+python demo.py --save-kinds panel            # comparison figures only
+python demo.py --save-kinds distorted,restored   # re-scorable pixels only
 ```
 
 `--save-every 0` skips the image directories entirely; `detections.csv` still covers

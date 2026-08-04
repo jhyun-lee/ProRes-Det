@@ -33,12 +33,45 @@ pip install -e ".[train]"       # + pytorch-msssim, …  → train.py
 pip install -e ".[live]"        # + screeninfo         → --live (not needed on Windows)
 pip install -e ".[test]"        # + pytest
 pip install -e ".[all]"         # everything
+pip install -e ".[all]" -r requirements-cuda.txt    # everything + CUDA torch (below)
 ```
 
 > Square brackets are glob characters in some shells (zsh). Quoting makes it work
 > in bash / zsh / PowerShell / cmd alike.
 
 Base dependencies are `torch torchvision opencv-python numpy PyYAML tqdm`.
+
+### GPU
+
+**The commands above install a CPU-only torch on Windows.** PyPI's default `torch`
+wheel carries no CUDA there, everything still runs, and the only symptom is
+restoration taking ~380 ms a frame instead of ~13. Add `requirements-cuda.txt` to the
+same command and the CUDA build comes with it:
+
+```bash
+pip install -e ".[all]" -r requirements-cuda.txt
+```
+
+An extra (`.[cuda]`) cannot do this on its own — a package has no way to name the
+index it wants to be fetched from — so the index line and the pins live in that file.
+It covers RTX 50-series (Blackwell) and everything older a 12.8 driver supports; for
+an older driver, swap `cu128` for `cu121` / `cu118` in the file. Check what you got:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+# 2.8.0+cu128 True      <- good
+# 2.8.0+cpu   False     <- CPU-only build; rerun the install with -r requirements-cuda.txt
+```
+
+Every entry point prints the device it resolved as its first line, so a run that
+quietly fell back to the CPU says so:
+
+```
+device: cuda - NVIDIA GeForce RTX 5090, torch 2.8.0+cu128
+device: cpu - torch 2.8.0+cpu is a CPU-only build, so restoration runs ~25x slower.
+```
+
+`--fp16` only takes effect on CUDA; on CPU it is ignored.
 
 Optional dependencies are imported inside the function that uses them, not at the
 top of a module. `--detector ssd` works without `ultralytics` installed, and skipping
@@ -68,7 +101,7 @@ ProRes-Det/
 │
 ├── tests/                    pytest suite
 ├── weights/                  3 checkpoints (51 MiB) → README_weights.md
-├── data/                     sample dataset + collect.py → README_data.md
+├── data/                     sample dataset + collect.py / record.py → README_data.md
 └── output/                   run artefacts
 ```
 
@@ -80,6 +113,7 @@ ProRes-Det/
 | [evaluate.py](evaluate.py) | Entry point. Score only samples that have GT: P/R/F1/mAP plus PSNR/SSIM, then write the report |
 | [train.py](train.py) | Entry point. Training loop (L1 + perceptual + SSIM + wavelet loss) |
 | [data/collect.py](data/collect.py) | Entry point. Dataset collection with the rig: video → beam frames, projector + webcam → captures, rectification → aligned pairs |
+| [data/record.py](data/record.py) | Entry point. Project a clip and record the camera's view as one mp4. Loads no weights |
 | [cli.py](projector_distortion/cli.py) | Args, config precedence and model construction shared by all three entry points |
 | [config.py](projector_distortion/config.py) | YAML load/merge, path resolution against the project root |
 | [data.py](projector_distortion/data.py) | Pairs pro/beam/clean/label by filename, and provides the training patch dataset |
@@ -101,14 +135,16 @@ git, so a clone runs as-is with nothing extra to download.
 |---|---|---|
 | [data/sample_input/pro/](data/sample_input/pro) | 22 camera captures of the projected screen | model input ch 0:3 |
 | [data/sample_input/beam/](data/sample_input/beam) | 22 frames the projector emitted | model input ch 3:6 |
-| [data/sample_gt/clean/](data/sample_gt/clean) | 10 screens with no projection | training target / PSNR·SSIM reference |
-| [data/sample_gt/labels/](data/sample_gt/labels) | 10 YOLO-format detection labels | mAP reference |
+| [data/sample_input/clean/](data/sample_input/clean) | 10 screens with no projection | training target / PSNR·SSIM reference |
+| [data/sample_input/labels/](data/sample_input/labels) | 10 YOLO-format detection labels | mAP reference |
 | [data/live/BeamVideo.mp4](data/live/BeamVideo.mp4) | Clip to play through the projector (3.3 min) | `--live` input |
 | [data/live/BaseBackGround.jpg](data/live/BaseBackGround.jpg) | Background shown during calibration | `--live` input |
+| [data/sample_video/](data/sample_video) | Two short clips, an alternative to BeamVideo | `data/record.py --clip` |
 
-The filename convention that pairs `pro` ↔ `beam` ↔ `clean`, and how to swap in real
-data, are in [data/README_data.md](data/README_data.md); checkpoint details are in
-[weights/README_weights.md](weights/README_weights.md).
+Input and ground truth live in the same folder, so `--input` and `--gt` both default
+to `data/sample_input`. The filename convention that pairs `pro` ↔ `beam` ↔ `clean`,
+and how to swap in real data, are in [data/README_data.md](data/README_data.md);
+checkpoint details are in [weights/README_weights.md](weights/README_weights.md).
 
 ---
 
@@ -120,6 +156,7 @@ python evaluate.py                # before/after mAP + PSNR/SSIM → output/Eval
 python train.py --epochs 30       # retrain the restorer            → runs/<tag>/
 python demo.py --live --screen 2  # webcam + projector rig          → output/<timestamp>/
 python data/collect.py capture    # collect your own data (4 stages) → data/collected_<MMDD>/
+python data/record.py --screen 2  # project + record, no models      → data/recordings/
 ```
 
 The first two need no arguments once the checkpoints are in `weights/`.

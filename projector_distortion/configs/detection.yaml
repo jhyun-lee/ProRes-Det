@@ -41,4 +41,4 @@ names:
   - Snake        # 16
 
 evaluate:
-  iou_threshold: 0.5      # IoU for a true positive when scoring against sample_gt
+  iou_threshold: 0.5      # IoU for a true positive in evaluate.py
