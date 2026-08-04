@@ -37,14 +37,16 @@ ablation:
   out_ch: 3           # residual
 
 train:
-  # Where the real training set lives. Absolute and machine-specific on purpose:
-  # the captures are far too large to ship. Each entry takes a directory, a glob, or
-  # a list - real sets come date-partitioned and the beam frames sit apart from the
-  # rest. Clear all three (or pass --data-root) to fall back to data/sample_input.
+  # Where the training set lives. Each entry takes a directory, a glob, or a list -
+  # real sets come date-partitioned and the beam frames sit apart from the rest.
+  #
+  # These three are globbed as written, so a relative path is read against the
+  # working directory, not the project root. Run train.py from the repo root, or
+  # give absolute paths. Clearing all three (null) falls back to --data-root.
   data:
-    pro: "C:/Users/ljhyu/OneDrive/Desktop/AWD_Net/0_ImageData/1_WarpData_0520/WarpData_*_pro"
-    clean: "C:/Users/ljhyu/OneDrive/Desktop/AWD_Net/0_ImageData/1_WarpData_0520/WarpData_*_ori"
-    beam: "C:/Users/ljhyu/OneDrive/Desktop/AWD_Net/0_ImageData/Learning_video_frames"
+    pro: "data/sample_input/pro"
+    clean: "data/sample_input/clean"
+    beam: "data/sample_input/beam"
 
   epochs: 30
   batch_size: 4

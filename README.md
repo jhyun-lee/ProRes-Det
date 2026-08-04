@@ -2,12 +2,11 @@
 
 **Pro**jector **Res**toration + **Det**ection
 
-Point a camera at a screen while a projector is throwing light on it and the original
-content is wrecked. This framework removes the projected light (restore) and
-measures object detection before and after that restoration.
+A camera pointed at a screen sees whatever the projector throws on it. This framework
+removes that light, then measures object detection before and after the removal.
 
-Both the restoration model and the detector are swappable behind two small
-interfaces.
+The restoration model and the detector both sit behind small interfaces, so either can be
+swapped without touching the pipeline.
 
 ```
         camera capture (pro)  ─┐
@@ -18,76 +17,121 @@ interfaces.
                      └────────── compare: mAP / PSNR / SSIM ──────────┘
 ```
 
+| Guide | Covers |
+|---|---|
+| [README_running.md](README_running.md) | `demo.py` · `evaluate.py` · `train.py` — every option, input, output |
+| [data/README_data.md](data/README_data.md) | Dataset layout, filename rules, labels, `collect.py`, `record.py` |
+| [weights/README_weights.md](weights/README_weights.md) | The three checkpoints, checkpoint format, the residual convention |
+
 ---
 
-## 1. Setup
+## 1. Install
 
-Requires Python ≥ 3.9.
+Python ≥ 3.9.
 
 ```bash
 git clone <repo> && cd ProRes-Det
 
+conda create -n prores-det python=3.10 -y
+conda activate prores-det
+
 pip install -e "."              # base: ssd + none backends
-pip install -e ".[yolo]"        # + ultralytics        → --detector yolo
-pip install -e ".[train]"       # + pytorch-msssim, …  → train.py
-pip install -e ".[live]"        # + screeninfo         → --live (not needed on Windows)
+pip install -e ".[yolo]"        # + ultralytics       → --detector yolo
+pip install -e ".[train]"       # + pytorch-msssim    → train.py
+pip install -e ".[live]"        # + screeninfo        → --live (not needed on Windows)
 pip install -e ".[test]"        # + pytest
 pip install -e ".[all]"         # everything
-pip install -e ".[all]" -r requirements-cuda.txt    # everything + CUDA torch (below)
 ```
 
-> Square brackets are glob characters in some shells (zsh). Quoting makes it work
-> in bash / zsh / PowerShell / cmd alike.
+Base dependencies: `torch torchvision opencv-python numpy PyYAML tqdm`.
 
-Base dependencies are `torch torchvision opencv-python numpy PyYAML tqdm`.
+Quote the brackets — they are glob characters in zsh.
+
+Optional dependencies are imported inside the function that needs them. `--detector ssd`
+runs without `ultralytics`, and skipping `--live` never loads `screeninfo`.
 
 ### GPU
 
-**The commands above install a CPU-only torch on Windows.** PyPI's default `torch`
-wheel carries no CUDA there, everything still runs, and the only symptom is
-restoration taking ~380 ms a frame instead of ~13. Add `requirements-cuda.txt` to the
-same command and the CUDA build comes with it:
+**On Windows the commands above install a CPU-only torch.** Nothing fails. Restoration
+just takes ~380 ms a frame instead of ~13. Add `requirements-cuda.txt` for the CUDA build:
 
 ```bash
 pip install -e ".[all]" -r requirements-cuda.txt
 ```
 
-An extra (`.[cuda]`) cannot do this on its own — a package has no way to name the
-index it wants to be fetched from — so the index line and the pins live in that file.
-It covers RTX 50-series (Blackwell) and everything older a 12.8 driver supports; for
-an older driver, swap `cu128` for `cu121` / `cu118` in the file. Check what you got:
+An extra cannot do this alone: a package has no way to name the index it wants to be
+fetched from. So the index line and the version pins live in that file. `cu128` covers
+RTX 50-series and everything older a 12.8 driver supports. For an older driver, swap
+`cu128` for `cu121` or `cu118` inside the file.
+
+Check what you got:
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-# 2.8.0+cu128 True      <- good
-# 2.8.0+cpu   False     <- CPU-only build; rerun the install with -r requirements-cuda.txt
+# 2.9.0+cu128 True      <- good
+# 2.9.0+cpu   False     <- CPU-only; rerun with -r requirements-cuda.txt
 ```
 
-Every entry point prints the device it resolved as its first line, so a run that
-quietly fell back to the CPU says so:
+Every entry point prints the device it resolved as its first line, so a run that quietly
+fell back says so:
 
 ```
-device: cuda - NVIDIA GeForce RTX 5090, torch 2.8.0+cu128
-device: cpu - torch 2.8.0+cpu is a CPU-only build, so restoration runs ~25x slower.
+device: cuda - NVIDIA GeForce RTX 5090, torch 2.9.0+cu128
+device: cpu - torch 2.9.0+cpu is a CPU-only build, so restoration runs ~25x slower.
 ```
 
-`--fp16` only takes effect on CUDA; on CPU it is ignored.
-
-Optional dependencies are imported inside the function that uses them, not at the
-top of a module. `--detector ssd` works without `ultralytics` installed, and skipping
-`--live` means `screeninfo` and the Win32 plumbing never load.
+`--fp16` applies only on CUDA. On CPU it is ignored.
 
 ---
 
-## 2. Layout
+## 2. Run
+
+```bash
+python demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
+python evaluate.py                # before/after mAP + PSNR/SSIM     → output/Eval_<dataset>/
+python train.py --epochs 30       # retrain the restorer             → runs/<tag>/
+python demo.py --live --screen 2  # webcam + projector rig           → output/<timestamp>/
+python data/collect.py capture    # collect your own data (4 stages) → data/collected_<MMDD>/
+python data/record.py --screen 2  # project + record, no models      → data/recordings/
+```
+
+The first two need no arguments. Sample data and all three checkpoints are tracked in git,
+so a clone runs as-is.
+
+Run from the repo root. Config paths resolve against the project root, but the
+`train.data` globs are read against the working directory.
+
+Swapping a model leaves every path unchanged:
+
+```bash
+python demo.py --detector ssd     # no ultralytics needed
+python demo.py --detector none    # restoration only
+python demo.py --limit 5          # first 5 pairs
+```
+
+`--live` needs hardware: a webcam pointed at a screen a projector is throwing to.
+`--screen N` is the projector's monitor index. `0` is always the primary display, so a
+projector attached as a second display is usually `1` or `2`. Pass anything if you do not
+know it — the monitor table is printed before anything else.
+
+```
+2 monitor(s) detected:
+      --screen 0 -> 2560x1440 at (0,0) (primary)  \\.\DISPLAY1
+      --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
+```
+
+Every option, input and output: [README_running.md](README_running.md).
+
+---
+
+## 3. Layout
 
 ```
 ProRes-Det/
 ├── demo.py                   restore → detect, end to end (offline / --live)
 ├── evaluate.py               detection before/after + restoration quality
 ├── train.py                  fine-tune the restoration model
-├── README_running.md         per-script options, input and output
-├── setup.py  requirements.txt  LICENSE
+├── setup.py  requirements.txt  requirements-cuda.txt  LICENSE
 │
 ├── projector_distortion/     ── the library
 │   ├── __init__.py           public API
@@ -99,108 +143,48 @@ ProRes-Det/
 │   ├── pipeline/             offline / live run loops
 │   └── utils/                image, visualization and recording helpers
 │
-├── tests/                    pytest suite
-├── weights/                  3 checkpoints (51 MiB) → README_weights.md
-├── data/                     sample dataset + collect.py / record.py → README_data.md
-└── output/                   run artefacts
+├── tests/                    pytest suite, 102 tests
+├── weights/                  3 checkpoints, 51 MiB, tracked in git
+├── data/                     sample dataset + collect.py / record.py, 81 MiB tracked
+└── output/                   run artefacts (git-ignored)
 ```
-
-### What each module does
 
 | File | Role |
 |---|---|
-| [demo.py](demo.py) | Entry point. Parse args → build models → run the offline/live pipeline → print a summary |
-| [evaluate.py](evaluate.py) | Entry point. Score only samples that have GT: P/R/F1/mAP plus PSNR/SSIM, then write the report |
-| [train.py](train.py) | Entry point. Training loop (L1 + perceptual + SSIM + wavelet loss) |
-| [data/collect.py](data/collect.py) | Entry point. Dataset collection with the rig: video → beam frames, projector + webcam → captures, rectification → aligned pairs |
-| [data/record.py](data/record.py) | Entry point. Project a clip and record the camera's view as one mp4. Loads no weights |
-| [cli.py](projector_distortion/cli.py) | Args, config precedence and model construction shared by all three entry points |
+| [demo.py](demo.py) | Entry point. Args → models → offline/live pipeline → summary |
+| [evaluate.py](evaluate.py) | Entry point. Scores the samples that have GT: P/R/F1/mAP + PSNR/SSIM |
+| [train.py](train.py) | Entry point. Training loop (L1 + perceptual + SSIM + wavelet) |
+| [data/collect.py](data/collect.py) | Entry point. Dataset collection with the rig, in 4 stages |
+| [data/record.py](data/record.py) | Entry point. Project a clip, record the camera. Loads no weights |
+| [cli.py](projector_distortion/cli.py) | Args, config precedence, model construction — shared by all three |
 | [config.py](projector_distortion/config.py) | YAML load/merge, path resolution against the project root |
-| [data.py](projector_distortion/data.py) | Pairs pro/beam/clean/label by filename, and provides the training patch dataset |
-| [models/base.py](projector_distortion/models/base.py) | `BaseRestorer` · `BaseDetector` · `Detection` · detector registry — the extension point |
-| [models/restoration.py](projector_distortion/models/restoration.py) | Restoration network (3-level U-Net), structural config, checkpoint I/O, pipeline wrapper |
-| [models/detection.py](projector_distortion/models/detection.py) | yolo (ultralytics) and ssd (torchvision) wrappers, box size filter |
-| [pipeline/offline.py](projector_distortion/pipeline/offline.py) | Batch over image pairs on disk. No hardware needed |
-| [pipeline/live.py](projector_distortion/pipeline/live.py) | Webcam + projector rig: monitor placement, calibration, warping, worker thread |
-| [utils/image.py](projector_distortion/utils/image.py) | BGR ↔ tensor conversion, resize, PSNR / SSIM / IoU |
-| [utils/visualize.py](projector_distortion/utils/visualize.py) | Box drawing, 2×2 comparison panel, calibration overlay |
+| [data.py](projector_distortion/data.py) | Pairs pro/beam/clean/label by filename; the training patch dataset |
+| [models/base.py](projector_distortion/models/base.py) | `BaseRestorer` · `BaseDetector` · `Detection` · detector registry |
+| [models/restoration.py](projector_distortion/models/restoration.py) | Restoration network, structural config, checkpoint I/O |
+| [models/detection.py](projector_distortion/models/detection.py) | yolo and ssd wrappers, box size filter |
+| [pipeline/offline.py](projector_distortion/pipeline/offline.py) | Batch over image pairs on disk. No hardware |
+| [pipeline/live.py](projector_distortion/pipeline/live.py) | Webcam + projector: monitor placement, calibration, warp, worker thread |
+| [utils/image.py](projector_distortion/utils/image.py) | BGR ↔ tensor, resize, PSNR / SSIM / IoU |
+| [utils/visualize.py](projector_distortion/utils/visualize.py) | Box drawing, 2×2 panel, calibration overlay |
 | [utils/recording.py](projector_distortion/utils/recording.py) | `RunRecorder` — owns everything written to the output directory |
 
-### Bundled dataset
-
-The sample data below and the three checkpoints under `weights/` are both tracked in
-git, so a clone runs as-is with nothing extra to download.
-
-| Path | Contents | Used as |
-|---|---|---|
-| [data/sample_input/pro/](data/sample_input/pro) | 22 camera captures of the projected screen | model input ch 0:3 |
-| [data/sample_input/beam/](data/sample_input/beam) | 22 frames the projector emitted | model input ch 3:6 |
-| [data/sample_input/clean/](data/sample_input/clean) | 10 screens with no projection | training target / PSNR·SSIM reference |
-| [data/sample_input/labels/](data/sample_input/labels) | 10 YOLO-format detection labels | mAP reference |
-| [data/live/BeamVideo.mp4](data/live/BeamVideo.mp4) | Clip to play through the projector (3.3 min) | `--live` input |
-| [data/live/BaseBackGround.jpg](data/live/BaseBackGround.jpg) | Background shown during calibration | `--live` input |
-| [data/sample_video/](data/sample_video) | Two short clips, an alternative to BeamVideo | `data/record.py --clip` |
-
-Input and ground truth live in the same folder, so `--input` and `--gt` both default
-to `data/sample_input`. The filename convention that pairs `pro` ↔ `beam` ↔ `clean`,
-and how to swap in real data, are in [data/README_data.md](data/README_data.md);
-checkpoint details are in [weights/README_weights.md](weights/README_weights.md).
+`setup.py` also installs `pdf-demo`, `pdf-evaluate` and `pdf-train`. Each delegates to the
+matching root script, so they need an editable install of a checkout.
 
 ---
 
-## 3. Running
-
-```bash
-python demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
-python evaluate.py                # before/after mAP + PSNR/SSIM → output/Eval_<dataset>/
-python train.py --epochs 30       # retrain the restorer            → runs/<tag>/
-python demo.py --live --screen 2  # webcam + projector rig          → output/<timestamp>/
-python data/collect.py capture    # collect your own data (4 stages) → data/collected_<MMDD>/
-python data/record.py --screen 2  # project + record, no models      → data/recordings/
-```
-
-The first two need no arguments once the checkpoints are in `weights/`.
-
-`--live` needs real hardware: a webcam pointed at a screen the projector is throwing to.
-`--screen N` is the index of the monitor the projector is connected to — the
-framework opens a borderless fullscreen window there and plays the clip through it,
-while the webcam records the result. `0` is always the primary display, so a projector
-attached as a second display is usually `1` or `2`. If you do not know it, pass anything:
-the detected monitor table is printed before anything else.
+## 4. Configuration
 
 ```
-2 monitor(s) detected:
-      --screen 0 -> 2560x1440 at (0,0) (primary)  \\.\DISPLAY1
-      --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
-```
-
-Swapping the model leaves input and output paths unchanged:
-
-```bash
-python demo.py --detector ssd     # swap the detector (no ultralytics needed)
-python demo.py --detector none    # restoration only, skip detection
-python demo.py --limit 5          # first 5 pairs only
-```
-
-Input, output and the full option list for each script → [README_running.md](README_running.md).
-
----
-
-## 4. YAML configuration
-
-```
-configs/*.yaml  <  YAML passed via --restoration-config / --detection-config  <  CLI flags
+configs/*.yaml  <  YAML via --restoration-config / --detection-config  <  CLI flags
 ```
 
 | File | Holds |
 |---|---|
-| [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | Restoration weights path, input size, structural toggles, training hyperparameters and loss weights |
-| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Detection backend, per-backend weights paths, conf threshold, box size filter, the 17 class names |
+| [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | Restoration weights, input size, structural toggles, training hyperparameters, loss weights, training data paths |
+| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names |
 
-Relative paths inside a config resolve against the project root, not the working
-directory, so `python demo.py` works from anywhere.
-
-To override only part of it, pass a YAML with just the keys you want changed — it is
+To override part of a config, pass a YAML with only the keys you want changed. It is
 merged recursively.
 
 ```yaml
@@ -213,6 +197,10 @@ detector:
 ```bash
 python demo.py --detection-config my_det.yaml
 ```
+
+Relative paths inside a config resolve against the project root — except the three
+`train.data` entries, which are globbed as written and so read against the working
+directory.
 
 ---
 
@@ -242,8 +230,7 @@ recording and evaluation code stay exactly as they were.
 ### Swap the restorer
 
 Subclass `BaseRestorer` and implement
-`restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)`. That is the whole
-interface.
+`restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)`. That is the whole interface.
 
 The shipped network predicts the residual to subtract, not the clean image:
 
@@ -253,13 +240,20 @@ output  (B, 3, H, W) = residual
 restored = (pro - residual).clamp(-1, 1)
 ```
 
-That convention keeps the original pixels intact by default and blocks the model from
-hallucinating objects it memorised during training. Why it matters and how the loss
-enforces it → [weights/README_weights.md](weights/README_weights.md#the-residual-convention).
+Why that convention matters, and how the loss enforces it:
+[weights/README_weights.md](weights/README_weights.md#the-residual-convention).
 
 ---
 
-## 6. License
+## 6. Tests
+
+```bash
+python -m pytest -q
+```
+
+---
+
+## 7. License
 
 MIT. See [LICENSE](LICENSE).
 
