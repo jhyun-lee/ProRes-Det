@@ -5,15 +5,17 @@
 # CLI flags (--no-ca, --base-dim, ...) override anything set here.
 
 model:
-  arch: restormer_like
-  weights: weights/restorer_restormerlike.pt
+  # Which restoration backend runs. Any name registered with @register_restorer;
+  # --restorer overrides it. Swapping this is the whole change - the pipeline,
+  # recording and evaluation code never learn which backend they are talking to.
+  backend: naf_se_unet
+  weights: weights/restorer_nafse_unet.pt
   # Network input, (width, height). Fully convolutional, so this can differ from the
   # 320x180 training patch without retraining.
   input_size: [640, 360]
-  fp16: false
 
 ablation:
-  # RestormerLikeBlock internals
+  # NAFSEBlock internals
   use_prenorm: true
   use_naf_norm: true
   use_simple_gate: true
@@ -33,20 +35,21 @@ ablation:
   dw_expand: 2
   ffn_expand: 2
   ca_reduction: 16
-  in_ch: 6            # cat([pro, beam])
-  out_ch: 3           # residual
+  # in_ch (6 = cat([distorted, light])) and out_ch (3 = residual) are fixed by the
+  # pipeline, so they are not listed here - overriding them only produces a network
+  # no checkpoint fits.
 
 train:
   # Where the training set lives. Each entry takes a directory, a glob, or a list -
-  # real sets come date-partitioned and the beam frames sit apart from the rest.
+  # real sets come date-partitioned and the light frames sit apart from the rest.
   #
   # These three are globbed as written, so a relative path is read against the
   # working directory, not the project root. Run train.py from the repo root, or
   # give absolute paths. Clearing all three (null) falls back to --data-root.
   data:
-    pro: "data/sample_input/pro"
-    clean: "data/sample_input/clean"
-    beam: "data/sample_input/beam"
+    distorted: "data/sample_input/distorted"
+    surface: "data/sample_input/surface"
+    light: "data/sample_input/light"
 
   epochs: 30
   batch_size: 4

@@ -11,16 +11,13 @@ detector:
   min_width: 20
   min_height: 20
   min_area: 500
-  # true keeps only the highest-confidence box per class (the original demo's
-  # behaviour). false keeps every box, which is what metric code needs.
-  best_per_class: false
 
 weights:
   yolo: weights/detector_yolo11s.pt
   ssd: weights/detector_ssdlite.pth
 
-# 17 classes, ids 0..16. YOLO checkpoints carry their own names and those win unless
-# --classes is passed; torchvision (ssd) has none, so this list is used.
+# 17 classes, ids 0..16. YOLO checkpoints carry their own names and those win over this
+# list; torchvision (ssd) has none, so this list is what it uses.
 names:
   - Apple        # 0
   - BlueBerry    # 1
@@ -39,6 +36,3 @@ names:
   - Monkey       # 14
   - Shark        # 15
   - Snake        # 16
-
-evaluate:
-  iou_threshold: 0.5      # IoU for a true positive in evaluate.py

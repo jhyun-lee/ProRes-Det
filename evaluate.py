@@ -5,13 +5,13 @@ Score detection and restoration before vs after, against data/sample_input.
 
     python evaluate.py
     python evaluate.py --detector ssd --conf 0.3
-    python evaluate.py --detectors yolo,ssd            # one row per backend
+    python evaluate.py --detector yolo,ssd             # one row per backend
     python evaluate.py --iou 0.75 --output output/eval
 
 Reports, for the distorted image and the restored one:
 
     detection   precision / recall / F1 / mAP@IoU, per class and overall
-    restoration PSNR and SSIM against the clean ground truth
+    restoration PSNR and SSIM against the surface ground truth
 
 mAP here is the single-IoU-threshold average precision over classes (VOC-style area
 under the interpolated PR curve), computed from this run's detections only - it is
@@ -30,8 +30,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from projector_distortion.cli import (  # noqa: E402
-    DEFAULT_GT, DEFAULT_INPUT, DEFAULT_OUTPUT, add_common_args, box_filter_kwargs,
-    build_models, run_dir,
+    DEFAULT_GT, DEFAULT_INPUT, DEFAULT_OUTPUT, DETECTOR_HELP, add_common_args,
+    box_filter_kwargs, build_models, run_dir,
 )
 from projector_distortion.config import resolve_path  # noqa: E402
 from projector_distortion.data import find_samples  # noqa: E402
@@ -42,43 +42,42 @@ from projector_distortion.utils.image import iou as box_iou  # noqa: E402
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--input", default=DEFAULT_INPUT, help="folder of pro/beam pairs")
+    p.add_argument("--input", default=DEFAULT_INPUT,
+                   help="folder of distorted/light pairs")
     p.add_argument("--gt", default=DEFAULT_GT,
-                   help="ground truth folder (clean/ + labels/)")
+                   help="ground truth folder (surface/ + labels/)")
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="where the report goes")
     p.add_argument("--name", default=None, help="run folder name")
     p.add_argument("--limit", type=int, default=0, help="score at most N pairs")
     p.add_argument("--iou", type=float, default=0.5, help="IoU for a true positive")
-    p.add_argument("--detectors", default=None,
-                   help="comma separated backends to compare, e.g. yolo,ssd")
-    p.add_argument("--best-per-class", action="store_true")
-    add_common_args(p)
+    add_common_args(p, detector_help=DETECTOR_HELP + ". Takes a comma separated list "
+                                     "here (yolo,ssd) for one row per backend")
     return p
 
 
-def match_detections(dets, gt, iou_thr):
+def match_detections(dets, gt_boxes, iou_thr):
     """
-    Greedy highest-confidence-first matching within one class.
+    Greedy highest-confidence-first matching, one class at a time.
 
-    Returns (tp_flags, n_gt, confs, cls_ids), all aligned with the
-    confidence-sorted order of `dets`.
+    Both arguments are already a single class's worth - `Scorer.add` splits them -
+    so nothing here compares class ids. Returns (tp_flags, n_gt, confs), all aligned
+    with the confidence-sorted order of `dets`.
     """
     order = sorted(range(len(dets)), key=lambda i: -dets[i].conf)
-    used = [False] * len(gt)
+    used = [False] * len(gt_boxes)
     tp = [0] * len(dets)
     for rank, i in enumerate(order):
-        d = dets[i]
         best_j, best_iou = -1, 0.0
-        for j, (gcls, gbox) in enumerate(gt):
-            if used[j] or gcls != d.cls_id:
+        for j, gbox in enumerate(gt_boxes):
+            if used[j]:
                 continue
-            v = box_iou(d.box, gbox)
+            v = box_iou(dets[i].box, gbox)
             if v > best_iou:
                 best_iou, best_j = v, j
         if best_j >= 0 and best_iou >= iou_thr:
             used[best_j] = True
             tp[rank] = 1
-    return tp, len(gt), [dets[i].conf for i in order], [dets[i].cls_id for i in order]
+    return tp, len(gt_boxes), [dets[i].conf for i in order]
 
 
 def average_precision(tp_flags, confs, n_gt):
@@ -109,16 +108,16 @@ class Scorer:
         self.images = 0
 
     def add(self, dets, gt, iou_thr):
+        """`gt` is [(cls_id, box), ...]. Both sides are split by class, then matched."""
         self.images += 1
-        by_cls_gt = defaultdict(list)
+        by_cls_gt, by_cls_det = defaultdict(list), defaultdict(list)
         for cls_id, box in gt:
-            by_cls_gt[cls_id].append((cls_id, box))
-        by_cls_det = defaultdict(list)
+            by_cls_gt[cls_id].append(box)
         for d in dets:
             by_cls_det[d.cls_id].append(d)
 
         for cls_id in set(by_cls_gt) | set(by_cls_det):
-            tp, n_gt, confs, _ = match_detections(
+            tp, n_gt, confs = match_detections(
                 by_cls_det.get(cls_id, []), by_cls_gt.get(cls_id, []), iou_thr)
             slot = self.per_class[cls_id]
             slot["tp"].extend(tp)
@@ -170,11 +169,12 @@ def evaluate_one(backend, args, out_dir, det_weights):
 
     samples = find_samples(resolve_path(args.input), gt_root=resolve_path(args.gt),
                            limit=args.limit)
-    scored = [s for s in samples if s.label and s.clean]
+    scored = [s for s in samples if s.label and s.surface]
     if not scored:
         raise SystemExit(
-            f"no sample has both a clean image and a label under {args.gt}\n"
-            f"    expected {args.gt}/clean/Ori<id>.jpg and {args.gt}/labels/Ori<id>.txt")
+            f"no sample has both a surface image and a label under {args.gt}\n"
+            f"    expected {args.gt}/surface/surface_<id>.jpg and "
+            f"{args.gt}/labels/surface_<id>.txt")
     print(f"scoring {len(scored)} of {len(samples)} pair(s) that have ground truth")
 
     sc_cap, sc_res = Scorer(class_names), Scorer(class_names)
@@ -239,21 +239,20 @@ def _write_csv(path, fieldnames, rows):
         w.writerows(rows)
 
 
-def _weights_per_backend(backends, named, explicit):
+def _weights_per_backend(backends, explicit):
     """
     --det-weights names one checkpoint, so it can apply to at most one backend.
 
-    Others fall back to configs/detection.yaml; otherwise comparing yolo against
-    ssd would load one backend's checkpoint into the other.
+    Across several it is ignored and every backend falls back to
+    configs/detection.yaml; otherwise comparing yolo against ssd would load one
+    backend's checkpoint into the other.
     """
-    if not explicit:
-        return {b: None for b in backends}
-    if len(backends) == 1:
+    if explicit and len(backends) == 1:
         return {backends[0]: explicit}
-    if named in backends:
-        return {b: (explicit if b == named else None) for b in backends}
-    print(f"warning: --det-weights is ambiguous across {backends}; ignoring it. "
-          f"Add --detector <backend> to say which one it belongs to.")
+    if explicit:
+        print(f"warning: --det-weights names one checkpoint but {len(backends)} "
+              f"backends are being compared; ignoring it. Per-backend paths come "
+              f"from configs/detection.yaml.")
     return {b: None for b in backends}
 
 
@@ -279,9 +278,9 @@ def main(argv=None):
     input_root = resolve_path(args.input) or args.input
     out_dir = run_dir(args.output, args.name or _eval_dir_name(input_root))
     _clear_stale_reports(out_dir)
-    backends = [b.strip() for b in (args.detectors or args.detector or "yolo").split(",")
-                if b.strip()]
-    weights = _weights_per_backend(backends, args.detector, args.det_weights)
+    # --detector takes a comma separated list here, so one run can compare backends.
+    backends = [b.strip() for b in (args.detector or "yolo").split(",") if b.strip()]
+    weights = _weights_per_backend(backends, args.det_weights)
 
     results = {}
     for backend in backends:
@@ -317,7 +316,7 @@ def _print_table(results):
     q = next((r["restoration"] for r in results.values() if r["restoration"]), None)
     if q:
         print("\n" + "=" * 78)
-        print("restoration quality vs clean ground truth")
+        print("restoration quality vs surface ground truth")
         print("=" * 78)
         print(f"  PSNR  distorted {q['psnr_distorted']:7.3f} dB -> "
               f"restored {q['psnr_restored']:7.3f} dB   "

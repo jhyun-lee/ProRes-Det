@@ -87,16 +87,9 @@ def _dets():
 
 
 def test_size_gate_drops_small_and_thin_boxes():
-    kept = filter_detections(_dets(), best_per_class=False)
+    kept = filter_detections(_dets())
     assert len(kept) == 3
     assert {d.cls_id for d in kept} == {0, 3}
-
-
-def test_best_per_class_keeps_the_top_confidence():
-    kept = filter_detections(_dets(), best_per_class=True)
-    assert len(kept) == 2
-    apple = next(d for d in kept if d.cls_id == 0)
-    assert apple.conf == 0.90
 
 
 def test_filter_defaults_keep_every_box_for_metrics():
@@ -161,7 +154,7 @@ def test_yolo_loads_and_returns_valid_detections(bgr_image):
 @needs_yolo
 @needs_ultralytics
 def test_yolo_prefers_the_names_baked_into_the_checkpoint():
-    """Explicit names must still win, otherwise --classes would be ignored."""
+    """Explicit names must still win, or detection.yaml's `names:` would be ignored."""
     default = build_detector("yolo", weights=YOLO_W, device="cpu")
     assert default.class_names, "the checkpoint should carry its own names"
     forced = build_detector("yolo", weights=YOLO_W, class_names=["x", "y"], device="cpu")

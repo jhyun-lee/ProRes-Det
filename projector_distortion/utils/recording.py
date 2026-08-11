@@ -15,10 +15,10 @@ Keeping captures/ un-annotated is what lets evaluate.py score the same run later
 another detector re-run over the identical restoration.
 
 Only those two image kinds are written per frame. The annotated views, the residual
-heatmap and the beam are all tiles of the panel already, so writing them again as
-separate jpgs cost four extra encodes a frame and bought nothing.
+heatmap and the light frame are all tiles of the panel already, so writing them again
+as separate jpgs cost four extra encodes a frame and bought nothing.
 
-Restoration quality (PSNR/SSIM against a clean reference) is not measured here -
+Restoration quality (PSNR/SSIM against a surface reference) is not measured here -
 that needs ground truth and belongs to evaluate.py.
 """
 
@@ -32,19 +32,17 @@ from datetime import datetime
 
 import cv2
 
+# All three are written by default. The un-annotated distorted/restored pair because
+# only that survives a later re-analysis; the panel because it is the view a human reads.
 FRAME_KINDS = ("distorted", "restored", "panel")
-
-# The un-annotated distorted/restored pair is kept because only that survives a later
-# re-analysis; the panel is kept because it is the view a human reads.
-DEFAULT_FRAME_KINDS = FRAME_KINDS
 
 DETECTION_FIELDS = ["frame_id", "name_id", "source", "cls_id", "name", "conf",
                     "x1", "y1", "x2", "y2"]
 # Every kind lands in the directory named here.
 KIND_DIRS = {"distorted": "captures", "restored": "captures", "panel": "frames_all"}
 
-# Measured at jpeg quality 92: 640x360 tiles, 1280x720 panel.
-_KB_PER_KIND = {"distorted": 53, "restored": 53, "panel": 210}
+# High enough that jpeg artefacts stay clear of what the panels are meant to show.
+JPEG_QUALITY = 92
 
 
 def parse_kinds(text):
@@ -56,24 +54,15 @@ def parse_kinds(text):
     return tuple(kinds)
 
 
-def estimate_footprint_mb(kinds, save_every, total_frames):
-    """Rough MB of jpgs for a whole run, per kind rather than a flat average."""
-    if not save_every or not kinds or not total_frames:
-        return 0.0
-    kb = sum(_KB_PER_KIND.get(k, 64) for k in kinds)
-    return (total_frames / save_every) * kb / 1024
-
-
 class RunRecorder:
     """Use as a context manager so csv handles and the video writer always close."""
 
-    def __init__(self, output_dir, save_every=1, frame_kinds=DEFAULT_FRAME_KINDS,
-                 jpeg_quality=92, max_saved_frames=0, video_size=None, video_fps=30):
+    def __init__(self, output_dir, save_every=1, frame_kinds=FRAME_KINDS,
+                 video_size=None, video_fps=30):
         self.dir = str(output_dir)
         self.save_every = max(0, int(save_every))
         self.frame_kinds = tuple(k for k in frame_kinds if k in FRAME_KINDS)
-        self.jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
-        self.max_saved_frames = max(0, int(max_saved_frames))
+        self.jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 
         self.captures_dir = os.path.join(self.dir, "captures")
         self.panels_dir = os.path.join(self.dir, "frames_all")
@@ -157,8 +146,6 @@ class RunRecorder:
 
     def should_save(self, frame_id):
         if not self.save_every or not self.frame_kinds:
-            return False
-        if self.max_saved_frames and self.saved_frames >= self.max_saved_frames:
             return False
         return frame_id % self.save_every == 0
 

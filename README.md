@@ -9,11 +9,11 @@ The restoration model and the detector both sit behind small interfaces, so eith
 swapped without touching the pipeline.
 
 ```
-        camera capture (pro)  ─┐
-                               ├─▶ restorer ─▶ residual ─▶ restored = pro − residual
-   projected source (beam)  ──┘                              │
+        camera capture (distorted)  ─┐
+                               ├─▶ restorer ─▶ residual ─▶ restored = distorted − residual
+   projected source (light)  ──┘                              │
                                                              │
-              detector(pro) ◀── before              after ──▶ detector(restored)
+              detector(distorted) ◀── before              after ──▶ detector(restored)
                      └────────── compare: mAP / PSNR / SSIM ──────────┘
 ```
 
@@ -107,9 +107,9 @@ ProRes-Det/
 │   ├── configs/              default settings (YAML)
 │   ├── models/               restoration + detection models
 │   ├── pipeline/             offline / live run loops
-│   └── utils/                image, visualization and recording helpers
+│   └── utils/                image, visualization, recording and display helpers
 │
-├── tests/                    pytest suite, 102 tests
+├── tests/                    pytest suite, 107 tests
 ├── weights/                  3 checkpoints, 51 MiB, tracked in git
 ├── data/                     sample dataset + collect.py / record.py, 81 MiB tracked
 └── output/                   run artefacts (git-ignored)
@@ -174,17 +174,53 @@ class MyDetector(BaseDetector):
 That is the whole change. `--detector mydet` works immediately, and the pipeline,
 recording and evaluation code stay exactly as they were.
 
-### Swap the restorer
+### Add a restorer
 
-Subclass `BaseRestorer` and implement
-`restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)`. That is the whole interface.
+The same shape, one registry along:
 
-The shipped network predicts the residual to subtract, not the clean image:
+```python
+from projector_distortion.models import BaseRestorer, register_restorer
+
+@register_restorer("myrest")
+class MyRestorer(BaseRestorer):
+    name = "myrest"
+
+    def __init__(self, weights, device="cpu", input_size=(640, 360), **_):
+        self.input_size = tuple(input_size)
+        self.net = load_my_model(weights)
+
+    def restore(self, distorted_bgr, light_bgr):
+        restored = self.net(distorted_bgr)            # `light` is offered, not required
+        return restored, residual_or_zeros
+```
+
+```bash
+python demo.py --restorer myrest --restorer-weights path/to.pt
+```
+
+or, without touching the command line:
+
+```yaml
+# my_rest.yaml
+model:
+  backend: myrest
+  weights: path/to.pt
+```
+
+`light` — the frame the projector emitted at that moment — is passed to every restorer
+because it is the one signal a ProCam rig has and an ordinary restoration setting does
+not. A single-image backend simply ignores it.
+
+The second return value is the residual view. A backend that predicts the surface image
+directly returns zeros there; only the residual panel tile and `residual_mean` lose their
+meaning, and everything else scores the same.
+
+The shipped network predicts the residual to subtract, not the surface image:
 
 ```
-input   (B, 6, H, W) = cat([pro, beam])  in [-1, 1]
+input   (B, 6, H, W) = cat([distorted, light])  in [-1, 1]
 output  (B, 3, H, W) = residual
-restored = (pro - residual).clamp(-1, 1)
+restored = (distorted - residual).clamp(-1, 1)
 ```
 
 Why that convention matters, and how the loss enforces it:

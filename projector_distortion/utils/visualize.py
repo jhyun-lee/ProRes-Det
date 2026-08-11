@@ -7,7 +7,6 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 BOX_COLOR = (0, 255, 0)
 TEXT_COLOR = (0, 0, 255)
-GT_COLOR = (0, 200, 255)
 
 CORNER_TAGS = ("TL", "TR", "BR", "BL")
 _CORNER_COLORS = ((0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 128, 0))
@@ -35,16 +34,6 @@ def draw_detections(img, detections, color=BOX_COLOR, text_color=TEXT_COLOR,
     return img
 
 
-def draw_ground_truth(img, boxes, names=None, color=GT_COLOR) -> np.ndarray:
-    for i, box in enumerate(boxes):
-        x1, y1, x2, y2 = (int(v) for v in box)
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, 1)
-        if names is not None and i < len(names):
-            cv2.putText(img, f"GT:{names[i]}", (x1, min(y2 + 14, img.shape[0] - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
-    return img
-
-
 def caption(img, text, org=(8, 22), scale=0.6) -> np.ndarray:
     """White text with a black outline, readable over any content."""
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3,
@@ -52,13 +41,6 @@ def caption(img, text, org=(8, 22), scale=0.6) -> np.ndarray:
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1,
                 cv2.LINE_AA)
     return img
-
-
-def side_by_side(left, right, left_label="before", right_label="after") -> np.ndarray:
-    if left.shape[:2] != right.shape[:2]:
-        right = cv2.resize(right, (left.shape[1], left.shape[0]))
-    return cv2.hconcat([caption(left.copy(), left_label),
-                        caption(right.copy(), right_label)])
 
 
 def panel_size(tile_w, tile_h):

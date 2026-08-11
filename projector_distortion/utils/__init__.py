@@ -1,4 +1,9 @@
-"""Helpers that keep the pipeline code readable."""
+"""
+Helpers that keep the pipeline code readable.
+
+`display` is deliberately not re-exported here: it imports ctypes, and an offline run
+has no windows to place. Import it as `projector_distortion.utils.display`.
+"""
 
 from .image import (
     IMAGE_EXT,
@@ -11,29 +16,20 @@ from .image import (
     ssim,
     tensor_to_bgr,
 )
-from .recording import (
-    DEFAULT_FRAME_KINDS,
-    FRAME_KINDS,
-    RunRecorder,
-    estimate_footprint_mb,
-    parse_kinds,
-)
+from .recording import FRAME_KINDS, RunRecorder, parse_kinds
 from .visualize import (
     caption,
     draw_detections,
-    draw_ground_truth,
     draw_quad,
     grid_2x2,
     panel_size,
-    side_by_side,
     warp_before_after,
 )
 
 __all__ = [
     "read_bgr", "resize", "bgr_to_tensor", "tensor_to_bgr", "residual_to_bgr",
     "psnr", "ssim", "iou", "IMAGE_EXT",
-    "draw_detections", "draw_ground_truth", "caption", "side_by_side", "grid_2x2",
+    "draw_detections", "caption", "grid_2x2",
     "panel_size", "draw_quad", "warp_before_after",
-    "RunRecorder", "FRAME_KINDS", "DEFAULT_FRAME_KINDS", "parse_kinds",
-    "estimate_footprint_mb",
+    "RunRecorder", "FRAME_KINDS", "parse_kinds",
 ]

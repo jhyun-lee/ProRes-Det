@@ -13,11 +13,12 @@ if ROOT not in sys.path:
 WEIGHTS = os.path.join(ROOT, "weights")
 DATA = os.path.join(ROOT, "data")
 
-RESTORER_W = os.path.join(WEIGHTS, "restorer_restormerlike.pt")
+RESTORER_W = os.path.join(WEIGHTS, "restorer_nafse_unet.pt")
 YOLO_W = os.path.join(WEIGHTS, "detector_yolo11s.pt")
 SSD_W = os.path.join(WEIGHTS, "detector_ssdlite.pth")
 
-SAMPLE_INPUT = os.path.join(DATA, "sample_input")   # pro/ beam/ + clean/ labels/
+# distorted/ light/ + surface/ labels/
+SAMPLE_INPUT = os.path.join(DATA, "sample_input")
 
 
 def _skip_missing(path, what):
@@ -56,8 +57,12 @@ def bgr_image():
 
 
 @pytest.fixture
-def pro_beam(bgr_image):
-    """A (pro, beam) pair; beam is a different pattern so the 6ch input is not doubled."""
+def distorted_light(bgr_image):
+    """
+    A (distorted, light) pair.
+
+    `light` is a different pattern so the 6ch input is not the same image doubled.
+    """
     rng = np.random.default_rng(1)
-    beam = rng.integers(20, 200, (360, 640, 3), dtype=np.uint8)
-    return bgr_image, beam
+    light = rng.integers(20, 200, (360, 640, 3), dtype=np.uint8)
+    return bgr_image, light

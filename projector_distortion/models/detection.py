@@ -167,22 +167,9 @@ def build_detector(kind, weights=None, class_names=None, conf=0.25, device="cpu"
     return cls(weights, class_names=class_names, conf=conf, device=device, imgsz=imgsz)
 
 
-def filter_detections(detections, min_width=20, min_height=20, min_area=500,
-                      best_per_class=False):
-    """
-    Drop boxes below the size gate; optionally keep only the top box per class.
-
-    best_per_class mirrors the original demo. It defaults to False because metric
-    code needs every box.
-    """
-    kept = [d for d in detections
+def filter_detections(detections, min_width=20, min_height=20, min_area=500):
+    """Drop boxes below the size gate. Every surviving box is kept - metrics need them."""
+    return [d for d in detections
             if (d.box[2] - d.box[0]) >= min_width
             and (d.box[3] - d.box[1]) >= min_height
             and d.area >= min_area]
-    if not best_per_class:
-        return kept
-    best = {}
-    for d in kept:
-        if d.cls_id not in best or d.conf > best[d.cls_id].conf:
-            best[d.cls_id] = d
-    return list(best.values())

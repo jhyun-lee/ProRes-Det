@@ -2,26 +2,23 @@
 Live pipeline: webcam + projector rig. Needs real hardware.
 
     projector shows BeamVideo frame N
-    webcam captures it                  -> 4-point homography -> `pro`
-    the frame shown --offset frames ago -> `beam`
-    restore(pro, beam) -> detect both -> 2x2 panel + recorder
+    webcam captures it                  -> 4-point homography -> `distorted`
+    the frame shown --offset frames ago -> `light`
+    restore(distorted, light) -> detect both -> 2x2 panel + recorder
 
 The first frame's warp input and output are written to calib/ and shown once, so the
 rectification the whole run depends on can be checked without stopping it.
 
-On Windows, cv2.setWindowProperty(WND_PROP_FULLSCREEN) snaps the window back to the
-primary display and silently undoes cv2.moveWindow(), which is why a naive --screen
-has no effect. Geometry goes through the Win32 API instead.
+Getting the window onto the projector's display is its own problem, and one that
+collect.py and record.py share; it lives in utils/display.py.
 """
 
-import ctypes
 import math
 import queue
 import statistics
 import sys
 import threading
 import time
-from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -29,6 +26,7 @@ import cv2
 import numpy as np
 
 from ..models import filter_detections
+from ..utils.display import Monitor, place_fullscreen
 from ..utils.image import resize
 from ..utils.visualize import draw_quad, grid_2x2
 
@@ -276,139 +274,14 @@ def open_webcam(index, backend="auto", width=None, height=None, fps=None):
     return cap
 
 
-Monitor = namedtuple("Monitor", "x y width height primary name")
-
-
-class _RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-
-class _MONITORINFOEXW(ctypes.Structure):
-    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _RECT), ("rcWork", _RECT),
-                ("dwFlags", ctypes.c_ulong), ("szDevice", ctypes.c_wchar * 32)]
-
-
-_MONITORINFOF_PRIMARY = 1
-
-
-def _set_dpi_aware():
-    """Report physical pixels; without this, display scaling corrupts coordinates."""
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-
-def _monitors_win32():
-    user32 = ctypes.windll.user32
-    proc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
-                              ctypes.POINTER(_RECT), ctypes.c_ssize_t)
-    found = []
-
-    def _cb(hmon, hdc, lprc, lparam):
-        info = _MONITORINFOEXW()
-        info.cbSize = ctypes.sizeof(_MONITORINFOEXW)
-        if user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
-            r = info.rcMonitor
-            found.append(Monitor(r.left, r.top, r.right - r.left, r.bottom - r.top,
-                                 bool(info.dwFlags & _MONITORINFOF_PRIMARY),
-                                 info.szDevice))
-        return 1
-
-    user32.EnumDisplayMonitors(None, None, proc(_cb), 0)
-    return found
-
-
-def list_monitors() -> List[Monitor]:
-    """All displays, primary first then left to right, so index 0 is always primary."""
-    monitors = []
-    if sys.platform == "win32":
-        _set_dpi_aware()
-        try:
-            monitors = _monitors_win32()
-        except Exception as e:
-            print(f"warning: Win32 monitor enumeration failed ({e}); trying screeninfo.")
-    if not monitors:
-        try:
-            from screeninfo import get_monitors
-            monitors = [Monitor(m.x, m.y, m.width, m.height,
-                                bool(getattr(m, "is_primary", False)), m.name or "")
-                        for m in get_monitors()]
-        except Exception as e:
-            print(f"warning: screeninfo unavailable ({e}).")
-    monitors.sort(key=lambda m: (not m.primary, m.x, m.y))
-    return monitors
-
-
-def _borderless_win32(title, mon):
-    """Strip the frame and pin the window to `mon`. True when it took effect."""
-    user32 = ctypes.windll.user32
-    user32.FindWindowW.restype = ctypes.c_void_p
-    hwnd = user32.FindWindowW(None, title)
-    if not hwnd:
-        return False
-
-    GWL_STYLE, GWL_EXSTYLE = -16, -20
-    WS_POPUP, WS_VISIBLE = 0x80000000, 0x10000000
-    FLAGS = 0x0020 | 0x0040 | 0x0010    # FRAMECHANGED | SHOWWINDOW | NOACTIVATE
-
-    def signed(v):
-        return v - (1 << 32) if v >= (1 << 31) else v
-
-    user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
-    user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
-                                    ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                                    ctypes.c_uint]
-    user32.SetWindowLongW(hwnd, GWL_STYLE, signed(WS_POPUP | WS_VISIBLE))
-    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, 0)
-    user32.SetWindowPos(hwnd, None, mon.x, mon.y, mon.width, mon.height, FLAGS)
-    return True
-
-
 def place_window(screen_index, image=None, announce=True) -> Optional[Monitor]:
-    """Put the projector window fullscreen on `screen_index`. Returns that Monitor."""
-    monitors = list_monitors()
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    """
+    The projector window, fullscreen on `screen_index`.
 
-    if not monitors:
-        print("warning: no monitors detected; plain fullscreen on the primary display.")
-        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        if image is not None:
-            cv2.imshow(WINDOW, image)
-            cv2.waitKey(1)
-        return None
-
-    if announce:
-        print(f"{len(monitors)} monitor(s) detected:")
-        for i, m in enumerate(monitors):
-            star = " (primary)" if m.primary else ""
-            print(f"      --screen {i} -> {m.width}x{m.height} at ({m.x},{m.y})"
-                  f"{star}  {m.name}")
-
-    if not 0 <= screen_index < len(monitors):
-        print(f"warning: monitor {screen_index} unavailable; using 0 (primary).")
-        screen_index = 0
-    target = monitors[screen_index]
-
-    cv2.setWindowProperty(WINDOW, cv2.WND_PROP_AUTOSIZE, 0)
-    cv2.moveWindow(WINDOW, target.x, target.y)
-    cv2.resizeWindow(WINDOW, target.width, target.height)
-    if image is not None:
-        cv2.imshow(WINDOW, image)     # the window must exist before Win32 can find it
-        cv2.waitKey(1)
-
-    if sys.platform == "win32":
-        if not _borderless_win32(WINDOW, target):
-            print("warning: could not restyle the window; using OpenCV fullscreen.")
-            cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    else:
-        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.waitKey(1)
-    return target
+    Thin wrapper over utils.display so the window title lives in one place and
+    collect.py / record.py keep importing `place_window` from here.
+    """
+    return place_fullscreen(WINDOW, screen_index, image, announce)
 
 
 @dataclass
@@ -417,7 +290,7 @@ class LiveResult:
 
     frame_id: int
     name_id: str
-    beam: np.ndarray
+    light: np.ndarray
     distorted: np.ndarray
     distorted_det: np.ndarray
     restored: np.ndarray
@@ -430,7 +303,7 @@ class LiveResult:
     t_detect: float = 0.0
     t_worker: float = 0.0
     write_dropped: bool = False
-    clean: Optional[np.ndarray] = None
+    surface: Optional[np.ndarray] = None
     gt_boxes: List = field(default_factory=list)
 
 
@@ -462,7 +335,7 @@ def _writer(write_queue, recorder, dropped):
 
 
 def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_event,
-            detector_name="detector", best_per_class=False, min_area=500,
+            lost=None, detector_name="detector", min_area=500,
             min_width=20, min_height=20):
     """
     Restore, detect and build the panel - all off the main thread.
@@ -471,38 +344,40 @@ def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_eve
     clip's fps. The main loop is left with `cv2.imshow` and the counters; the disk
     goes to `_writer`. The panel is built here rather than there because the main
     loop displays it.
+
+    `lost` collects the frame ids whose result could not be handed back, so the main
+    loop can stop waiting for them. list.append is atomic, so it needs no lock.
     """
     from ..utils.visualize import draw_detections
 
     while not stop_event.is_set():
         try:
-            frame_id, distorted, beam, cam_frame = frame_queue.get(timeout=0.5)
+            frame_id, distorted, light = frame_queue.get(timeout=0.5)
         except queue.Empty:
             continue
         started = time.perf_counter()
 
         t0 = time.perf_counter()
-        restored_clean, residual, residual_mean = restorer.restore_full(distorted, beam)
+        restored_plain, residual, residual_mean = restorer.restore_full(distorted, light)
         t_restore = time.perf_counter() - t0
 
-        distorted_clean = resize(distorted, tuple(restorer.input_size))
+        distorted_plain = resize(distorted, tuple(restorer.input_size))
         t1 = time.perf_counter()
-        raw_c = detector(distorted_clean)
-        raw_r = detector(restored_clean)
+        raw_c = detector(distorted_plain)
+        raw_r = detector(restored_plain)
         t_detect = time.perf_counter() - t1
 
-        gate = dict(min_area=min_area, min_width=min_width, min_height=min_height,
-                    best_per_class=best_per_class)
+        gate = dict(min_area=min_area, min_width=min_width, min_height=min_height)
         det_c = filter_detections(raw_c, **gate)
         det_r = filter_detections(raw_r, **gate)
 
         result = LiveResult(
             frame_id=frame_id, name_id=f"frame_{frame_id:06d}",
-            beam=beam,
-            distorted=distorted_clean,
-            distorted_det=draw_detections(distorted_clean.copy(), det_c),
-            restored=restored_clean,
-            restored_det=draw_detections(restored_clean.copy(), det_r),
+            light=light,
+            distorted=distorted_plain,
+            distorted_det=draw_detections(distorted_plain.copy(), det_c),
+            restored=restored_plain,
+            restored_det=draw_detections(restored_plain.copy(), det_r),
             residual=residual, residual_mean=residual_mean,
             det_distorted=det_c, det_restored=det_r,
             t_restore=t_restore, t_detect=t_detect,
@@ -519,13 +394,17 @@ def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_eve
         try:
             result_queue.put((result, panel), timeout=1.0)
         except queue.Full:
-            continue
+            # The main loop is not draining. Dropping the result silently left it
+            # counted as in flight forever, so the final drain waited out its whole
+            # timeout and blamed every straggler on a missed deadline. Report it.
+            if lost is not None:
+                lost.append(result.frame_id)
 
 
 def build_panel(result, detector_name="detector") -> np.ndarray:
     return grid_2x2(
-        result.beam, result.distorted_det, result.restored_det, result.residual,
-        labels=["beam (projected source)",
+        result.light, result.distorted_det, result.restored_det, result.residual,
+        labels=["light (projected source)",
                 f"distorted + {detector_name} ({len(result.det_distorted)})",
                 f"restored + {detector_name} ({len(result.det_restored)})",
                 f"residual (mean {result.residual_mean:.3f})"],
@@ -535,7 +414,7 @@ def build_panel(result, detector_name="detector") -> np.ndarray:
 def run_live(video, restorer, detector, recorder, background=None, camera=0,
              screen=1, offset=6, manual_calib=False, debug_view=False,
              max_frames=0, cam_size=(1280, 960), cam_fps=30, cam_backend="auto",
-             calib_settle=0.8, best_per_class=False, min_area=500, min_width=20,
+             calib_settle=0.8, min_area=500, min_width=20,
              min_height=20, detector_name="detector", analyse_every=0) -> Dict:
     """
     Drive the rig until the clip ends or 'q' is pressed. Returns a summary dict.
@@ -628,22 +507,22 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     frame_queue = queue.Queue(maxsize=MAX_IN_FLIGHT)
     result_queue = queue.Queue(maxsize=MAX_IN_FLIGHT + 2)
     write_queue = queue.Queue(maxsize=MAX_PENDING_WRITES)
-    write_errors = []
+    write_errors, lost_results = [], []
     stop_event = threading.Event()
     writer = threading.Thread(target=_writer, daemon=True,
                               args=(write_queue, recorder, write_errors))
     writer.start()
     worker = threading.Thread(
         target=_worker, daemon=True,
-        args=(frame_queue, result_queue, write_queue, restorer, detector, stop_event),
-        kwargs={"detector_name": detector_name, "best_per_class": best_per_class,
-                "min_area": min_area, "min_width": min_width,
-                "min_height": min_height})
+        args=(frame_queue, result_queue, write_queue, restorer, detector, stop_event,
+              lost_results),
+        kwargs={"detector_name": detector_name, "min_area": min_area,
+                "min_width": min_width, "min_height": min_height})
     worker.start()
 
     place_window(screen, announce=False)
-    # Pre-roll so `beam` lags `pro` by `offset` frames, compensating rig latency.
-    pro_buffer = [background_small.copy() for _ in range(max(0, offset))]
+    # Pre-roll so `light` lags `distorted` by `offset` frames, compensating rig latency.
+    light_buffer = [background_small.copy() for _ in range(max(0, offset))]
 
     frame_count = processed = dropped = skipped = writes_dropped = 0
     totals = {"distorted": 0, "restored": 0}
@@ -688,7 +567,16 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     def collect(block=False):
         """Take whatever the worker has finished. Only the final drain blocks."""
         nonlocal in_flight, dropped
-        while in_flight and (block or not result_queue.empty()):
+        while True:
+            # Results the worker finished but could not hand back are gone; they must
+            # still leave in_flight, or the final drain waits for something no one
+            # will ever send.
+            while lost_results:
+                lost_results.pop()
+                in_flight -= 1
+                dropped += 1
+            if not in_flight or not (block or not result_queue.empty()):
+                return
             try:
                 result = result_queue.get(timeout=10)
             except queue.Empty:
@@ -725,7 +613,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
                 cv2.imshow(WARP_WINDOW, figure)
                 cv2.waitKey(1)
 
-            ok_p, pro_frame = clip.read()
+            ok_p, light_frame = clip.read()
             if not ok_p:
                 print("projector clip ended.")
                 break
@@ -733,20 +621,23 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
             # Project the clip at its own resolution and keep the model's copy
             # separate. Shrinking before projecting would put the network's input
             # size on the screen, only for the fullscreen window to blow it back up.
-            pro_buffer.append(resize(pro_frame, out_size))
-            cv2.imshow(WINDOW, pro_frame)
+            light_buffer.append(resize(light_frame, out_size))
+            cv2.imshow(WINDOW, light_frame)
             if debug_view:
                 cv2.imshow(DEBUG_WINDOW,
                            draw_quad(cam_frame, points,
                                      f"pre-warp camera  frame {frame_count}"))
 
-            beam = pro_buffer.pop(0)
+            light = light_buffer.pop(0)
             if frame_count % stride == 0:
                 try:
                     # Hand over every on-stride frame, letting the queue absorb a
                     # worker that ran long. Gating on "is the worker idle" instead
                     # would drop whole slots and put a hitch in the analysed video.
-                    frame_queue.put_nowait((frame_count, distorted, beam, cam_frame))
+                    # The raw camera frame stays here: the worker only ever needed
+                    # the rectified `distorted`, and queueing both pinned a
+                    # full-resolution frame per slot for nothing.
+                    frame_queue.put_nowait((frame_count, distorted, light))
                     in_flight += 1
                 except queue.Full:
                     skipped += 1        # stride is still catching up; let it go by

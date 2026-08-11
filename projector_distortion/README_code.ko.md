@@ -26,7 +26,7 @@ demo.py / evaluate.py / train.py
    │     ├─ models.build_restorer
    │     └─ models.build_detector
    │
-   ├─ data.find_samples          파일명으로 pro ↔ beam ↔ clean ↔ label 짝짓기
+   ├─ data.find_samples          파일명으로 distorted ↔ light ↔ surface ↔ label 짝짓기
    │  data.index_triplets        학습 전용: 완성된 삼중쌍
    │
    ├─ pipeline.run_offline       ─┐
@@ -43,8 +43,8 @@ demo.py / evaluate.py / train.py
 `evaluate.py`는 `run_offline`을 건너뛰고 `process_sample`을 직접 돌린다. 프레임을 기록하는
 대신 샘플별로 채점하기 때문이다.
 
-`pipeline/__init__.py`는 `run_live`를 지연 프록시로 노출한다. `live`를 import하면 오프라인
-실행에는 전혀 필요 없는 ctypes와 Win32 배관이 함께 딸려온다.
+`pipeline/__init__.py`는 `run_live`를 지연 프록시로 노출한다. 덕분에 오프라인 실행은 쓸 일
+없는 웹캠·Win32 창 배관(`utils/display.py`)을 아예 로드하지 않는다.
 
 ---
 
@@ -63,20 +63,21 @@ demo.py / evaluate.py / train.py
 
 | 파일 | 내용 |
 |---|---|
-| [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (weights, input_size, fp16) · `ablation` (구조 + 용량) · `train` (데이터 경로, 하이퍼파라미터, 손실 가중치) |
-| [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, 박스 게이트) · 백엔드별 `weights` · `names` (17클래스) · `evaluate.iou_threshold` |
+| [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (backend, weights, input_size) · `ablation` (구조 + 용량) · `train` (데이터 경로, 하이퍼파라미터, 손실 가중치) |
+| [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, 박스 게이트) · 백엔드별 `weights` · `names` (17클래스) |
 
 ### `models/`
 
 | 파일 | 담당 |
 |---|---|
-| [`models/base.py`](models/base.py) | `BaseRestorer`, `BaseDetector`, `Detection`, `NullDetector`, `@register_detector` 레지스트리 |
-| [`models/restoration.py`](models/restoration.py) | `RestorationConfig` + 토글 10개(`TOGGLES`), 네트워크(`LayerNorm2d` → `SimpleGate` → `CALayer` → `NAFBlock` → `RestormerLikeBlock` → `RestorationNet`), 체크포인트 저장/로드, `RestormerLikeRestorer` |
+| [`models/base.py`](models/base.py) | `BaseRestorer`, `BaseDetector`, `Detection`, `NullDetector`, `@register_restorer` · `@register_detector` 레지스트리 |
+| [`models/restoration.py`](models/restoration.py) | `RestorationConfig` + 토글 10개(`TOGGLES`), 네트워크(`LayerNorm2d` → `SimpleGate` → `CALayer` → `NAFBlock` → `NAFSEBlock` → `RestorationNet`), 체크포인트 저장/로드, `NAFSEUNetRestorer` |
 | [`models/detection.py`](models/detection.py) | `YoloDetector` (ultralytics), `SsdDetector` (torchvision), `build_detector`, `filter_detections`, 기본 `CLASS_NAMES` |
 
-네트워크는 3-level U-Net이다. 이름과 달리 MDTA 어텐션이 없어서 Restormer가 아니라 NAFNet +
-squeeze-excite다. fully convolutional이므로 180×320 학습 패치와 640×360 추론 크기가 동일하게
-동작한다.
+네트워크는 NAFNet 블록 + squeeze-excite 채널 어텐션으로 이루어진 3-level U-Net이다 —
+이름 그대로 `naf_se_unet`. MDTA 어텐션도, depthwise-gated FFN도 없으므로 Restormer가
+아니다. 리네임 이전 체크포인트에 남아 있는 `restormer_like` 태그는 무시해도 된다.
+fully convolutional이므로 180×320 학습 패치와 640×360 추론 크기가 동일하게 동작한다.
 
 `ssd`는 라벨을 정규화한다. torchvision 헤드는 COCO id(1..N, 0 = 배경)를 내므로 `detect()`에서
 1을 뺀다. ultralytics는 이미 0-based다.
@@ -86,7 +87,7 @@ squeeze-excite다. fully convolutional이므로 180×320 학습 패치와 640×3
 | 파일 | 담당 |
 |---|---|
 | [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_sample` (한 쌍 엔드투엔드), `build_panel`, `run_offline`. 하드웨어 불필요 |
-| [`pipeline/live.py`](pipeline/live.py) | Win32로 모니터 열거·테두리 없는 배치, 흑/백 플래시 캘리브레이션, homography + 워프, 복원/검출 워커 스레드, 라이터 스레드, stride 자동 결정 |
+| [`pipeline/live.py`](pipeline/live.py) | 웹캠 열기, 흑/백 플래시 캘리브레이션, homography + 워프, 복원/검출 워커 스레드, 라이터 스레드, stride 자동 결정 |
 
 `live.py`는 스레드 3개로 돈다. 메인 루프가 투사·촬영하고, 워커가 복원·검출하고, 라이터가
 인코딩한다. 큐 깊이는 `MAX_IN_FLIGHT = 3`, `MAX_PENDING_WRITES = 8`. 분석 stride는
@@ -100,8 +101,15 @@ autotuning 때문에 1번 프레임이 정상 상태의 약 50배가 걸리기 �
 | 파일 | 담당 |
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
-| [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `draw_ground_truth`, `caption`, `side_by_side`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `parse_kinds`, `estimate_footprint_mb` |
+| [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`, `parse_kinds` |
+| [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 모니터 열거와 테두리 없는 배치 |
+
+`display.py`를 따로 둔 이유는 창을 프로젝터로 보내는 일이 파이프라인의 관심사가 아니고,
+`collect.py`·`record.py`도 똑같이 필요하기 때문이다. Windows에서
+`cv2.setWindowProperty(WND_PROP_FULLSCREEN)`는 창을 주 디스플레이로 되돌리면서
+`cv2.moveWindow()`를 조용히 무효화한다. 그래서 순진한 `--screen`은 먹지 않고, 좌표를 Win32
+API로 처리한다. `live.place_window`는 프로젝터 창 제목만 채워 넘기는 한 줄짜리 래퍼다.
 
 `ssim`을 여기서 직접 구현한다(가우시안 윈도우 11×11, sigma 1.5). 지표 계산이 scikit-image나
 pytorch-msssim을 끌어오지 않도록 하기 위해서다. `residual_to_bgr`은 mean |residual|을 JET
@@ -122,8 +130,8 @@ pytorch-msssim을 끌어오지 않도록 하기 위해서다. `residual_to_bgr`�
 # models/base.py
 class BaseRestorer:
     input_size: tuple[int, int] = (640, 360)
-    def restore(self, pro_bgr, beam_bgr) -> tuple[restored_bgr, residual_bgr]: ...
-    def restore_full(self, pro_bgr, beam_bgr) -> tuple[restored, residual, mean_abs]: ...
+    def restore(self, distorted_bgr, light_bgr) -> tuple[restored_bgr, residual_bgr]: ...
+    def restore_full(self, distorted_bgr, light_bgr) -> tuple[restored, residual, mean_abs]: ...
 
 class BaseDetector:
     def detect(self, bgr) -> list[Detection]: ...
@@ -137,8 +145,8 @@ class Detection:
 # data.py
 @dataclass(frozen=True)
 class Sample:
-    name_id: str; pro: str; beam: str
-    clean: str | None = None      # 선택: 채점에만 필요
+    name_id: str; distorted: str; light: str
+    surface: str | None = None      # 선택: 채점에만 필요
     label: str | None = None
 ```
 
@@ -147,10 +155,10 @@ class Sample:
 @dataclass
 class FrameResult:
     frame_id, name_id
-    beam, distorted, distorted_det, restored, restored_det, residual   # BGR 배열
+    light, distorted, distorted_det, restored, restored_det, residual   # BGR 배열
     residual_mean, det_distorted, det_restored, t_restore, t_detect
-    clean, gt_boxes                                                    # GT 없으면 None / []
-    def metrics(self) -> dict   # distorted·restored의 psnr/ssim, clean 없으면 None
+    surface, gt_boxes                                                    # GT 없으면 None / []
+    def metrics(self) -> dict   # distorted·restored의 psnr/ssim, surface 없으면 None
 ```
 
 `restore_full`이 있는 이유는 호출자가 forward를 두 번 돌리지 않고 한 번에 mean |residual|을
@@ -168,9 +176,9 @@ from projector_distortion import build_restorer, build_detector
 from projector_distortion.data import find_samples
 from projector_distortion.pipeline import process_sample
 
-restorer = build_restorer("weights/restorer_restormerlike.pt")
+restorer = build_restorer("weights/restorer_nafse_unet.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-root = "data/sample_input"               # pro/ beam/ + 채점용 clean/ labels/
+root = "data/sample_input"               # distorted/ light/ + 채점용 surface/ labels/
 for i, s in enumerate(find_samples(root, root)):
     r = process_sample(s, restorer, detector, frame_id=i)
     print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
@@ -187,15 +195,15 @@ for i, s in enumerate(find_samples(root, root)):
 
 ## 테스트
 
-102개, 하드웨어 불필요.
+107개, 하드웨어 불필요.
 
 | 파일 | 커버 |
 |---|---|
 | [`../tests/conftest.py`](../tests/conftest.py) | 픽스처 `root` / `bgr_image` / `pro_beam`, 체크포인트·선택 모듈 부재 시 skip |
-| [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | 파일명 id, 샘플 탐색, PSNR/SSIM/IoU, `RunRecorder` 동작, 삼중쌍 인덱싱, `average_precision`, argparse 기본값, `device_note`, `requirements-cuda.txt` 핀 |
-| [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig`와 tag, 모든 토글의 빌드 + 1스텝 학습, forward 크기, 체크포인트 왕복, 기본 가중치 |
-| [`../tests/test_detection.py`](../tests/test_detection.py) | 레지스트리, 라벨 정규화, 박스 크기 게이트, `best_per_class`, 실제 체크포인트로 두 백엔드 검증 |
-| [`../tests/test_collect.py`](../tests/test_collect.py) | 리그 없이 되는 `collect.py`: 코너 정렬, 경계 리샘플링, `boundary` vs `homography` 동등성, `warp`·`beam` 단계 출력 |
+| [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | 파일명 id, 샘플 탐색, PSNR/SSIM/IoU, `RunRecorder` 동작, 삼중쌍 인덱싱, `average_precision`, argparse 기본값, 미등록 백엔드 처리, 스텁으로 구동한 `live._worker` 큐 계약, `device_note`, `requirements-cuda.txt` 핀 |
+| [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig`와 tag, 모든 토글의 빌드 + 1스텝 학습, forward 크기, 체크포인트 왕복, 기본 가중치, 서드파티 백엔드로 검증한 복원기 레지스트리 |
+| [`../tests/test_detection.py`](../tests/test_detection.py) | 레지스트리, 라벨 정규화, 박스 크기 게이트, 실제 체크포인트로 두 백엔드 검증 |
+| [`../tests/test_collect.py`](../tests/test_collect.py) | 리그 없이 되는 `collect.py`: 코너 정렬, 경계 리샘플링, `boundary` vs `homography` 동등성, `warp`·`light` 단계 출력 |
 
 ```bash
 python -m pytest -q

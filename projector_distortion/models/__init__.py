@@ -1,4 +1,12 @@
-"""Swappable model layer: restoration + detection behind two small interfaces."""
+"""
+Swappable model layer: restoration + detection behind two small interfaces.
+
+What is re-exported here is the layer's contract - the base classes, the detector
+registry, the builders and the checkpoint helpers. The restoration network's own
+building blocks (LayerNorm2d, SimpleGate, CALayer, NAFBlock, NAFSEBlock,
+RestorationNet) are one architecture's internals, so they stay in
+`projector_distortion.models.restoration` and are imported from there when needed.
+"""
 
 from .base import (
     BaseDetector,
@@ -7,7 +15,10 @@ from .base import (
     NullDetector,
     detector_names,
     get_detector_class,
+    get_restorer_class,
     register_detector,
+    register_restorer,
+    restorer_names,
 )
 from .detection import (
     CLASS_NAMES,
@@ -17,17 +28,9 @@ from .detection import (
     filter_detections,
 )
 from .restoration import (
-    ARCH_NAME,
-    CHECKPOINT_FORMAT,
     TOGGLES,
-    CALayer,
-    LayerNorm2d,
-    NAFBlock,
+    NAFSEUNetRestorer,
     RestorationConfig,
-    RestorationNet,
-    RestormerLikeBlock,
-    RestormerLikeRestorer,
-    SimpleGate,
     add_ablation_args,
     build_network,
     build_restorer,
@@ -40,11 +43,10 @@ from .restoration import (
 __all__ = [
     "BaseRestorer", "BaseDetector", "Detection", "NullDetector",
     "register_detector", "detector_names", "get_detector_class",
-    "RestorationConfig", "RestorationNet", "RestormerLikeRestorer", "TOGGLES",
-    "LayerNorm2d", "SimpleGate", "CALayer", "NAFBlock", "RestormerLikeBlock",
+    "register_restorer", "restorer_names", "get_restorer_class",
+    "RestorationConfig", "NAFSEUNetRestorer", "TOGGLES",
     "build_network", "build_restorer", "save_checkpoint", "load_checkpoint",
     "count_parameters", "add_ablation_args", "config_from_args",
-    "ARCH_NAME", "CHECKPOINT_FORMAT",
     "CLASS_NAMES", "YoloDetector", "SsdDetector", "build_detector",
     "filter_detections",
 ]

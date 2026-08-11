@@ -26,31 +26,31 @@ data/
 ├── collect.py              build your own dataset with a projector and a webcam
 ├── record.py               project a clip and record the camera's view (no models)
 ├── sample_input/           input *and* ground truth for demo / evaluate / train
-│   ├── pro/    projected_<oriId>_<beamId>.jpg   22 files, 640×360
-│   ├── beam/   output_video_<beamId>.jpg        22 files, 1280×720 and 854×480
-│   ├── clean/  Ori<oriId>.jpg                   10 files, 640×360
-│   └── labels/ Ori<oriId>.txt                   10 files, 107 boxes
+│   ├── distorted/ distorted_<surfaceId>_<lightId>.jpg  22 files, 640×360
+│   ├── light/     light_<lightId>.jpg                  22 files, 1280×720 and 854×480
+│   ├── surface/   surface_<surfaceId>.jpg              10 files, 640×360
+│   └── labels/    surface_<surfaceId>.txt              10 files, 107 boxes
 ├── live/                   input for demo.py --live and record.py
 │   ├── BeamVideo.mp4       clip to play through the projector
 │   │                       5,858 frames @30fps = 3.3 min, 854×480, 55 MiB
 │   └── BaseBackGround.jpg  background shown during calibration, 1280×960
 ├── sample_video/           two short clips, an alternative to BeamVideo
-│                           4,262 and 5,381 frames @30fps, 854×480, 23 MiB
+│                           4,262 and 5,381 frames @30fps, 854×480 / 856×480, 23 MiB
 └── recordings/             where record.py writes (git-ignored)
 ```
 
 | Path | Used as |
 |---|---|
-| `sample_input/pro/` | Model input ch 0:3 — the camera's view of the projected screen |
-| `sample_input/beam/` | Model input ch 3:6 — the frame the projector emitted |
-| `sample_input/clean/` | Training target, and the PSNR/SSIM reference |
+| `sample_input/distorted/` | Model input ch 0:3 — the camera's view of the projected screen |
+| `sample_input/light/` | Model input ch 3:6 — the frame the projector emitted |
+| `sample_input/surface/` | Training target, and the PSNR/SSIM reference |
 | `sample_input/labels/` | The mAP reference, YOLO format |
 
-`clean/` and `labels/` sit inside `sample_input/`, so `--input` and `--gt` take the same
+`surface/` and `labels/` sit inside `sample_input/`, so `--input` and `--gt` take the same
 path. Both are optional. Without them a run still works, it just cannot be scored.
 
 Image sizes need not match. Everything is resized to the model's `input_size` (640×360 by
-default), which is why `beam/` mixes 1280×720 and 854×480 with no special handling.
+default), which is why `light/` mixes 1280×720 and 854×480 with no special handling.
 
 `data/` is 81 MiB tracked, almost all of it video — `live/BeamVideo.mp4` (55 MiB) and
 `sample_video/` (23 MiB). The dataset proper is 4.2 MiB. Delete the clips if you never use
@@ -64,50 +64,51 @@ Three views of one moment are tied together by ids inside the filename. No count
 paths are hard-coded anywhere, so real data drops in as long as it follows this.
 
 ```
-projected_0409001429_0404023332_294_75.jpg
+distorted_0409001429_0404023332_294_75.jpg
           └───┬────┘ └──────┬───────┘
-            oriId         beamId
+           surfaceId      lightId
 
-  → sample_input/clean/Ori0409001429.jpg                  (ground truth screen)
-  → sample_input/labels/Ori0409001429.txt                 (detection ground truth)
-  → sample_input/beam/output_video_0404023332_294_75.jpg  (frame the projector emitted)
+  → sample_input/surface/surface_0409001429.jpg          (ground truth screen)
+  → sample_input/labels/surface_0409001429.txt           (detection ground truth)
+  → sample_input/light/light_0404023332_294_75.jpg       (frame the projector emitted)
 ```
 
 | Role | Filename | In the model |
 |---|---|---|
-| `pro` | `projected_<oriId>_<beamId>.jpg` | input ch 0:3 |
-| `beam` | `output_video_<beamId>.jpg` | input ch 3:6 |
-| `clean` | `Ori<oriId>.jpg` | training target / PSNR·SSIM reference |
-| `label` | `Ori<oriId>.txt` | detection mAP reference |
+| `distorted` | `distorted_<surfaceId>_<lightId>.jpg` | input ch 0:3 |
+| `light` | `light_<lightId>.jpg` | input ch 3:6 |
+| `surface` | `surface_<surfaceId>.jpg` | training target / PSNR·SSIM reference |
+| `label` | `surface_<surfaceId>.txt` | detection mAP reference |
 
-- No `_` in `oriId`. Everything up to the first `_` is taken as the oriId.
-- `beamId` may contain `_`. Above it is `0404023332_294_75`.
-- One `clean` backing several `pro` captures is normal. Here 10 clean images back 22 `pro`
-  files, 1–3 each.
-- `beam` is 1:1 with `pro`.
+- No `_` in `surfaceId`. Everything up to the first `_` is taken as the surfaceId.
+- `lightId` may contain `_`. Above it is `0404023332_294_75`.
+- One `surface` backing several `distorted` captures is normal. Here 10 surface images
+  back 22 `distorted` files, 1–3 each.
+- `light` is 1:1 with `distorted`.
 - Recognised extensions: `.jpg` `.jpeg` `.png` `.bmp`.
-- A `pro` with no matching `beam` is skipped with a warning. The run does not fail.
-- `clean` and `label` are optional. A missing `clean` only drops PSNR/SSIM, and
+- A `distorted` with no matching `light` is skipped with a warning. The run does not fail.
+- `surface` and `label` are optional. A missing `surface` only drops PSNR/SSIM, and
   `evaluate.py` scores just the samples that have both.
 
 ---
 
 ## Layouts
 
-Two are auto-detected, by which folder exists.
+Auto-detected, by which folder exists.
 
 | Name | Folders |
 |---|---|
-| `flat` (used here) | `pro/` `beam/` (+ `clean/`) |
+| `flat` (used here) | `distorted/` `light/` (+ `surface/`) |
+| `legacy-flat` | `pro/` `beam/` (+ `clean/`) — sessions collected before the rename |
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/sample_input --gt data/sample_input   # flat
+python demo.py --input data/sample_input                          # flat
 python demo.py --input /path/to/WarpData_0520                     # research
 ```
 
-Images sitting loose in one folder are handled as `mixed`, split by the `projected_` and
-`output_video_` prefixes.
+Images sitting loose in one folder are handled as `mixed`, split by the `distorted_` and
+`light_` prefixes.
 
 ---
 
@@ -131,13 +132,13 @@ labels.
 ## `collect.py` — build a dataset with the rig
 
 The sample set above was made this way. Four stages, in order. `check` and `capture` drive
-the projector and the webcam; `beam` and `warp` are plain file work and run anywhere.
+the projector and the webcam; `light` and `warp` are plain file work and run anywhere.
 
 ```bash
 python data/collect.py check                                  # monitors + webcam
-python data/collect.py beam    --src data/live/BeamVideo.mp4   # video -> beam frames
-python data/collect.py capture --screen 2 --rounds 3           # project and shoot
-python data/collect.py warp                                    # rectify into pairs
+python data/collect.py light   --src data/live/BeamVideo.mp4  # video -> light frames
+python data/collect.py capture --screen 2 --rounds 3          # project and shoot
+python data/collect.py warp                                   # rectify into pairs
 ```
 
 Everything lands in one session folder, already in the layout the rest of the repo reads.
@@ -146,19 +147,18 @@ the first.
 
 ```
 data/collected_<MMDD>/
-├── beam/   output_video_<beamId>.jpg           [beam]     what the projector emits
-├── raw/    ori/Ori<oriId>.jpg                  [capture]  camera frames, unrectified
-│           pro/projected_<oriId>_<beamId>.jpg  [capture]
-├── clean/  Ori<oriId>.jpg                      [warp]     rectified, 640×360
-├── pro/    projected_<oriId>_<beamId>.jpg      [warp]     rectified, 640×360
-├── debug/  <oriId>_warp.jpg                    [warp]     before/after evidence
-└── collect_meta.json                           every stage's settings and counts
+├── light/      light_<lightId>.jpg                    [light]    what the projector emits
+├── raw/        surface/surface_<surfaceId>.jpg        [capture]  camera frames, unrectified
+│               distorted/distorted_<surfaceId>_<lightId>.jpg     [capture]
+├── surface/    surface_<surfaceId>.jpg                [warp]     rectified, 640×360
+├── distorted/  distorted_<surfaceId>_<lightId>.jpg    [warp]     rectified, 640×360
+├── debug/      <surfaceId>_warp.jpg                   [warp]     before/after evidence
+└── collect_meta.json                                  every stage's settings and counts
 ```
 
 ```bash
-python demo.py  --input data/collected_0803 --gt data/collected_0803
-python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803/beam \
-                --clean-dir data/collected_0803/clean
+python demo.py  --input data/collected_0803
+python train.py --data-root data/collected_0803
 ```
 
 ### Camera flags
@@ -181,12 +181,12 @@ Lists the displays and opens the webcam, so `capture` is not the first attempt.
   --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
 ```
 
-### `beam` — video → beam frames
+### `light` — video → light frames
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--src <path>` | `data/live/BeamVideo.mp4` | Video file, or a folder of them |
-| `--out <dir>` | `<root>/beam` | — |
+| `--out <dir>` | `<root>/light` | — |
 | `--step N` | `30` | Keep every Nth frame. 30 = one per second at 30fps |
 | `--size W H` | `1280 720` | `0 0` keeps the source resolution |
 | `--quality N` | `95` | JPEG quality |
@@ -198,26 +198,27 @@ Lists the displays and opens the webcam, so `capture` is not the first attempt.
 | Option | Default | Meaning |
 |---|---|---|
 | `--screen N` | `1` | Monitor the projector is attached to. `check` prints the table |
-| `--beam <dir>` | `<root>/beam` | — |
-| `--background <path>` | `data/live/BaseBackGround.jpg` | Projected while the clean shot is taken |
-| `--rounds N` | `1` | Scene setups; each starts with a fresh clean shot |
-| `--limit N` | `0` | Beam frames per round |
-| `--shuffle` | off | Random beam order, so a short round still spans the clip |
+| `--light <dir>` | `<root>/light` | — |
+| `--background <path>` | `data/live/BaseBackGround.jpg` | Projected while the surface shot is taken |
+| `--rounds N` | `1` | Scene setups; each starts with a fresh surface shot |
+| `--limit N` | `0` | Light frames per round |
+| `--shuffle` | off | Random light order, so a short round still spans the clip |
 | `--seed N` | `42` | For `--shuffle` |
 | `--settle-ms N` | `150` | Wait after showing a frame before capturing it |
 | `--flush N` | `3` | Buffered camera frames to drop before each capture |
-| `--round-settle F` | `2.0` | Seconds between the clean shot and the first projection |
+| `--round-settle F` | `2.0` | Seconds between the surface shot and the first projection |
 | `--preview-every N` | `10` | Refresh the capture preview every N frames |
 | `--jpeg-quality N` | `95` | — |
 
 **How a round works.** `capture` projects the background and waits for you to press `s`.
-That shot becomes `clean` — the scene with nothing projected on it, so place the objects
-and step out of frame first. Its timestamp becomes the `oriId`, and every capture of that
-round carries it. That is how many `pro` files end up pointing at one `clean`. Then each
-beam frame is projected once and captured once. `--rounds N` repeats with a new scene.
+That shot becomes `surface` — the scene with nothing projected on it, so place the objects
+and step out of frame first. Its timestamp becomes the `surfaceId`, and every capture of
+that round carries it. That is how many `distorted` files end up pointing at one
+`surface`. Then each light frame is projected once and captured once. `--rounds N`
+repeats with a new scene.
 
 **Timing.** `--settle-ms` and `--flush` are what keep a capture matched to the frame that
-caused it. If `pro` looks like the *previous* beam frame, raise both.
+caused it. If `distorted` looks like the *previous* light frame, raise both.
 
 ### `warp` — rectify into aligned pairs
 
@@ -226,7 +227,7 @@ caused it. If `pro` looks like the *previous* beam frame, raise both.
 | `--warp boundary` | default | 4 corners + the measured edge bow |
 | `--warp homography` | — | Corners only. For a flat screen with a clean boundary |
 | `--warp tps` | — | The legacy thin-plate spline. Needs `opencv-python<5` |
-| `--ori <dir>` · `--pro <dir>` | `<root>/raw/ori` · `<root>/raw/pro` | — |
+| `--surface <dir>` · `--distorted <dir>` | `<root>/raw/surface` · `<root>/raw/distorted` | — |
 | `--points N` | `20` | Boundary correspondences (tps and the debug overlay) |
 | `--inset N` | `2` | Pixels to pull the boundary in, off the bright projection rim |
 | `--work-size W H` | `1280 720` | Rectification resolution |
@@ -236,21 +237,21 @@ caused it. If `pro` looks like the *previous* beam frame, raise both.
 
 **Why it exists.** In the camera the screen is a trapezoid and the objects sit at a
 different scale in every capture, so nothing before this stage is trainable. `warp` finds
-the screen boundary in the clean shot, then rectifies that scene's clean frame *and* all
-its captures with the identical mapping. The pair ends up sharing a pixel grid, and the
-only difference left is the projected light.
+the screen boundary in the surface shot, then rectifies that scene's surface frame *and*
+all its captures with the identical mapping. The pair ends up sharing a pixel grid, and
+the only difference left is the projected light.
 
 `boundary` is exact for a flat screen seen off-axis and still right when the edges bow.
 OpenCV 5 removed the shape module, which is what `tps` needs.
 
-Check `<session>/debug/<oriId>_warp.jpg` on a short trial session before committing to a
+Check `<session>/debug/<surfaceId>_warp.jpg` on a short trial session before committing to a
 long one. It shows the detected boundary, the sampled points and the rectified result
 together.
 
 ### Labels are not collected
 
-`clean/` has to be annotated by hand into `<session>/labels/Ori<oriId>.txt` before
-`evaluate.py` can score mAP. Restoration training and PSNR/SSIM need no labels.
+`surface/` has to be annotated by hand into `<session>/labels/surface_<surfaceId>.txt`
+before `evaluate.py` can score mAP. Restoration training and PSNR/SSIM need no labels.
 
 ---
 
@@ -315,12 +316,12 @@ python demo.py
 python evaluate.py
 
 # 2) or point at the original dataset directly
-python demo.py --input /mnt/.../WarpData_0520 --gt /mnt/.../WarpData_0520
+python demo.py --input /mnt/.../WarpData_0520
 ```
 
 Training reads its three directories from `train.data` in
 [configs/restoration.yaml](../projector_distortion/configs/restoration.yaml). Each takes a
-directory, a glob, or a list. Precedence, the `--data-root` fallback and the clean-target
+directory, a glob, or a list. Precedence, the `--data-root` fallback and the surface-target
 search order: [README_running.md](../README_running.md#where-the-training-data-comes-from).
 
 ---

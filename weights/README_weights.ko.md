@@ -1,6 +1,6 @@
 # weights/
 
-체크포인트 3개, 체크포인트 포맷, 그리고 복원 네트워크가 clean 이미지가 아니라 residual을
+체크포인트 3개, 체크포인트 포맷, 그리고 복원 네트워크가 surface 이미지가 아니라 residual을
 예측하는 이유.
 
 - [파일](#파일)
@@ -18,14 +18,14 @@
 
 | 파일 | 용도 | 구조 | 파라미터 | 크기 |
 |---|---|---|---|---|
-| `restorer_restormerlike.pt` | 복원 | RestormerLikeBlock 3-level U-Net | 4,184,259 | 16.1 MiB |
+| `restorer_nafse_unet.pt` | 복원 | NAFSEBlock 3-level U-Net | 4,184,259 | 16.1 MiB |
 | `detector_yolo11s.pt` | `--detector yolo` | YOLO11s | 9,434,371 | 18.3 MiB |
 | `detector_ssdlite.pth` | `--detector ssd` | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
 
 세 개 모두 동일한 17클래스 프로젝터 왜곡 데이터셋으로 파인튜닝됐다 — 과일 11개, 동물 6개.
 클래스 목록은 [configs/detection.yaml](../projector_distortion/configs/detection.yaml)에 있다.
-YOLO 체크포인트는 같은 17개 이름을 내부에 갖고 있고, `--classes`를 넘기지 않으면 그쪽이
-우선한다. torchvision에는 이름이 없으므로 `ssd`는 항상 config의 목록을 쓴다.
+YOLO 체크포인트는 같은 17개 이름을 내부에 갖고 있고, config의 목록보다 그쪽이 우선한다.
+torchvision에는 이름이 없으므로 `ssd`는 항상 config의 목록을 쓴다.
 
 ---
 
@@ -36,7 +36,8 @@ config에서. 소스에 하드코딩된 경로는 없다.
 ```yaml
 # projector_distortion/configs/restoration.yaml
 model:
-  weights: weights/restorer_restormerlike.pt
+  backend: naf_se_unet
+  weights: weights/restorer_nafse_unet.pt
 
 # projector_distortion/configs/detection.yaml
 weights:
@@ -58,7 +59,7 @@ python demo.py --detector ssd --det-weights path/to/other.pth
 `train.py`가 만드는 것은 가중치 옆에 아키텍처 config를 함께 저장한다:
 
 ```python
-{"format": 2, "arch": "restormer_like",
+{"format": 2, "arch": "naf_se_unet",
  "cfg": {...RestorationConfig...}, "state_dict": {...},
  "epoch": 30, "loss": 0.1234, ...}
 ```
@@ -80,7 +81,7 @@ python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
 | `legacy-raw` | 순수 `state_dict`. 기본값으로 재구성 |
 | `defaults` | format 2인데 `cfg` 키가 없음 |
 
-`restorer_restormerlike.pt`는 `legacy-raw`다. config가 없는 순수 state_dict이므로 기본값으로
+`restorer_nafse_unet.pt`는 `legacy-raw`다. config가 없는 순수 state_dict이므로 기본값으로
 재구성된다 — 모든 토글 ON, tag `FULL`. strict 로드가 성공하는 것이 이 파일이 실제로 FULL
 변형임을 확인해 준다.
 
@@ -88,27 +89,27 @@ python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
 
 ## residual 규약
 
-복원 네트워크는 복원된 이미지를 그리지 않는다. `pro`에서 **빼낼 빛**을 내놓는다:
+복원 네트워크는 복원된 이미지를 그리지 않는다. `distorted`에서 **빼낼 빛**을 내놓는다:
 
 ```
-input   (B, 6, H, W) = cat([pro, beam])  in [-1, 1]
+input   (B, 6, H, W) = cat([distorted, light])  in [-1, 1]
 output  (B, 3, H, W) = residual
-restored = (pro - residual).clamp(-1, 1)
+restored = (distorted - residual).clamp(-1, 1)
 ```
 
 ### 왜 clean이 아니라 residual인가
 
 **1) 원본 보존이 기본 동작이 된다.**
-투사광이 닿지 않은 곳은 residual ≈ 0으로 충분하고, `pro` 픽셀이 그대로 통과한다. "아무것도
+투사광이 닿지 않은 곳은 residual ≈ 0으로 충분하고, `distorted` 픽셀이 그대로 통과한다. "아무것도
 하지 않음"이 항등 함수이므로, 네트워크는 바뀌어야 하는 것만 학습하면 된다. clean을 직접
 회귀하면 아무 문제 없던 배경까지 다시 생성해야 하고, 건드리지 않아도 됐던 영역이 뭉개진다.
 
 **2) "객체를 그려 넣는" 과적합을 막는다.**
 네트워크가 clean을 직접 출력하면, 손실을 가장 빨리 낮추는 방법은 입력을 대체로 무시하고 학습
-세트에서 외운 화면을 재현하는 것이다. 번들 데이터는 특히 그 유혹이 크다 — clean 10장이 pro
-22장을 받치니 clean이 반복되고 `oriId`별로 타깃을 외우는 것이 이득이 된다. 그렇게 학습된 모델은
+세트에서 외운 화면을 재현하는 것이다. 번들 데이터는 특히 그 유혹이 크다 — surface 10장이 distorted
+22장을 받치니 clean이 반복되고 `surfaceId`별로 타깃을 외우는 것이 이득이 된다. 그렇게 학습된 모델은
 존재하지 않았던 객체를 검출기에 보여주고, 평가의 의미 자체가 무너진다.
-`restored = pro − residual`은 출력이 항상 실제 카메라 픽셀에서 파생되도록 강제한다.
+`restored = distorted − residual`은 출력이 항상 실제 카메라 픽셀에서 파생되도록 강제한다.
 
 **3) 값이 발산할 수 없다.**
 출력 `tanh`가 residual을 [-1, 1]로 묶고, 뺄셈 후의 `clamp(-1, 1)`이 결과를 다시 묶는다 —
@@ -120,12 +121,12 @@ restored = (pro - residual).clamp(-1, 1)
 clean과 비교된다. 무엇을 뺄지는 네트워크가 찾아낼 몫으로 남는다.
 
 ```python
-residual = net(torch.cat([pro, beam], dim=1))     # 네트워크 출력
-restored = (pro - residual).clamp(-1, 1)          # 그래프 안의 뺄셈
-loss = (0.93 * L1(restored, clean)
-      + 2.04 * Perceptual(restored, clean)
-      + 0.53 * (1 - SSIM(restored, clean))
-      + 0.90 * WaveletHF(restored, clean))        # 네 항 모두 `restored`를 측정
+residual = net(torch.cat([distorted, light], dim=1))     # 네트워크 출력
+restored = (distorted - residual).clamp(-1, 1)          # 그래프 안의 뺄셈
+loss = (0.93 * L1(restored, surface)
+      + 2.04 * Perceptual(restored, surface)
+      + 0.53 * (1 - SSIM(restored, surface))
+      + 0.90 * WaveletHF(restored, surface))        # 네 항 모두 `restored`를 측정
 ```
 
 | 손실 항 | 측정 대상 | 벌하는 것 |

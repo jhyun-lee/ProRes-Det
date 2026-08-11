@@ -1,15 +1,20 @@
 """
 Restoration network, its config, and the BaseRestorer wrapper.
 
-A 3-level U-Net of RestormerLikeBlock (LayerNorm2d -> NAFBlock -> CALayer):
+A 3-level U-Net of NAFSEBlock (LayerNorm2d -> NAFBlock -> CALayer):
 
-    input  (B, 6, H, W) = cat([pro, beam]) in [-1, 1]
+    input  (B, 6, H, W) = cat([distorted, light]) in [-1, 1]
     output (B, 3, H, W) = residual
-    restored = (pro - residual).clamp(-1, 1)
+    restored = (distorted - residual).clamp(-1, 1)
 
-Despite the name there is no MDTA attention here, so this is NAFNet + squeeze-excite
-rather than Restormer. It is fully convolutional, which is why the 180x320 training
+There is no MDTA attention and no depthwise-gated FFN here, so this is NAFNet blocks
+plus squeeze-excite channel attention in a U-Net, not Restormer - which is what the
+`naf_se_unet` name says. It is fully convolutional, which is why the 180x320 training
 patch and the 640x360 inference size behave identically.
+
+Checkpoints written before the rename carry `arch: "restormer_like"`. Nothing reads
+that field to rebuild the network - the architecture comes from the embedded `cfg` -
+so an old checkpoint still loads unchanged.
 """
 
 import os
@@ -21,10 +26,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..utils.image import bgr_to_tensor, residual_to_bgr, tensor_to_bgr
-from .base import BaseRestorer
+from .base import BaseRestorer, register_restorer
 
 CHECKPOINT_FORMAT = 2
-ARCH_NAME = "restormer_like"
+ARCH_NAME = "naf_se_unet"
+LEGACY_ARCH_NAME = "restormer_like"
 
 
 @dataclass
@@ -104,7 +110,7 @@ TOGGLES = [
 ]
 
 TOGGLE_HELP = {
-    "no-prenorm": "disable the pre-LayerNorm of RestormerLikeBlock",
+    "no-prenorm": "disable the pre-LayerNorm of NAFSEBlock",
     "no-naf-norm": "disable LayerNorm2d inside NAFBlock",
     "no-simple-gate": "replace SimpleGate (x1*x2) with GELU (no channel halving)",
     "no-naf-scale": "disable learnable residual scales beta / gamma",
@@ -117,20 +123,24 @@ TOGGLE_HELP = {
 }
 
 
-def add_ablation_args(parser, capacity: bool = True):
-    """Register the --no-* toggles, and optionally the capacity overrides."""
+def add_ablation_args(parser):
+    """
+    Register the --no-* toggles and the capacity overrides. Training only.
+
+    Inference has no use for them: every checkpoint carries the config it was trained
+    with, so demo.py and evaluate.py rebuild the right architecture with no flags.
+    """
     g = parser.add_argument_group("restoration ablation")
     for _, flag, _ in TOGGLES:
         g.add_argument(f"--{flag}", action="store_true", help=TOGGLE_HELP[flag])
-    if capacity:
-        c = parser.add_argument_group("restoration capacity")
-        c.add_argument("--base-dim", type=int, default=48)
-        c.add_argument("--enc-depth", default="2,2,3", help="3 comma separated ints")
-        c.add_argument("--dec-depth", default="2,2,2", help="3 comma separated ints")
-        c.add_argument("--bottleneck-depth", type=int, default=2)
-        c.add_argument("--dw-expand", type=int, default=2)
-        c.add_argument("--ffn-expand", type=int, default=2)
-        c.add_argument("--ca-reduction", type=int, default=16)
+    c = parser.add_argument_group("restoration capacity")
+    c.add_argument("--base-dim", type=int, default=48)
+    c.add_argument("--enc-depth", default="2,2,3", help="3 comma separated ints")
+    c.add_argument("--dec-depth", default="2,2,2", help="3 comma separated ints")
+    c.add_argument("--bottleneck-depth", type=int, default=2)
+    c.add_argument("--dw-expand", type=int, default=2)
+    c.add_argument("--ffn-expand", type=int, default=2)
+    c.add_argument("--ca-reduction", type=int, default=16)
     return parser
 
 
@@ -224,8 +234,8 @@ class NAFBlock(nn.Module):
         return x + (y * self.gamma if self.gamma is not None else y)
 
 
-class RestormerLikeBlock(nn.Module):
-    """LayerNorm -> NAFBlock -> channel attention."""
+class NAFSEBlock(nn.Module):
+    """LayerNorm -> NAFBlock -> squeeze-excite channel attention."""
 
     def __init__(self, c, cfg: RestorationConfig = None):
         super().__init__()
@@ -239,7 +249,7 @@ class RestormerLikeBlock(nn.Module):
 
 
 class RestorationNet(nn.Module):
-    """3-level encoder / bottleneck / 3-level decoder over RestormerLikeBlock."""
+    """3-level encoder / bottleneck / 3-level decoder over NAFSEBlock."""
 
     def __init__(self, cfg: RestorationConfig = None):
         super().__init__()
@@ -248,7 +258,7 @@ class RestorationNet(nn.Module):
         bd, ed, dd = cfg.base_dim, cfg.enc_depth, cfg.dec_depth
 
         def stage(channels, depth):
-            return nn.Sequential(*[RestormerLikeBlock(channels, cfg)
+            return nn.Sequential(*[NAFSEBlock(channels, cfg)
                                    for _ in range(depth)])
 
         self.stem = nn.Conv2d(cfg.in_ch, bd, 3, 1, 1)
@@ -359,52 +369,70 @@ def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
         meta = {"format": 1, "arch": ARCH_NAME, "cfg_source": "legacy-raw"}
 
     model = build_network(used).to(device)
-    missing, unexpected = model.load_state_dict(_strip_prefixes(state_dict),
-                                                strict=strict)
+    try:
+        missing, unexpected = model.load_state_dict(_strip_prefixes(state_dict),
+                                                    strict=strict)
+    except RuntimeError as e:
+        raise RuntimeError(_mismatch_help(path, used, meta["cfg_source"])) from e
     if missing or unexpected:
         meta["missing_keys"], meta["unexpected_keys"] = list(missing), list(unexpected)
     return model, used, meta
 
 
-class RestormerLikeRestorer(BaseRestorer):
-    """Owns normalisation, autocast and the numpy <-> tensor round trip."""
+def _mismatch_help(path, cfg: RestorationConfig, cfg_source: str) -> str:
+    """
+    Turn torch's wall of missing keys into the one thing that fixes it.
 
-    name = "restormer_like"
+    The common cause is a checkpoint that carries no config of its own: it gets
+    rebuilt from the defaults, so an ablated variant never matches. Nothing in the
+    key list says that, and the ablation flags are training-only, so the answer is
+    the `ablation:` block of a config file.
+    """
+    lines = [f"{os.path.basename(str(path))} does not fit the architecture it was "
+             f"loaded into (tag {cfg.tag()}, config from {cfg_source})."]
+    if cfg_source in ("legacy-raw", "defaults"):
+        lines.append(
+            "    This checkpoint carries no config of its own, so it was rebuilt from\n"
+            "    the defaults. If it is an ablated variant, describe it in the\n"
+            "    'ablation:' block of a YAML and pass --restoration-config <file>.")
+    else:
+        lines.append("    The embedded config does not match the stored weights, so "
+                     "the file is likely corrupt or hand-edited.")
+    return "\n".join(lines)
+
+
+@register_restorer(ARCH_NAME)
+class NAFSEUNetRestorer(BaseRestorer):
+    """Owns normalisation and the numpy <-> tensor round trip."""
+
+    name = ARCH_NAME
 
     def __init__(self, weights, device="cpu", cfg: RestorationConfig = None,
-                 input_size=(640, 360), fp16=False):
+                 input_size=(640, 360), **_):
         self.device = device
         self.input_size = tuple(input_size)
-        self.fp16 = bool(fp16) and str(device).startswith("cuda")
         self.net, self.cfg, self.meta = load_checkpoint(weights, device=device, cfg=cfg)
         self.net.eval()
         self.weights = weights
         self.params = count_parameters(self.net)
 
     @torch.no_grad()
-    def _forward(self, pro_bgr, beam_bgr):
-        pro = bgr_to_tensor(pro_bgr, self.device, self.input_size)
-        beam = bgr_to_tensor(beam_bgr, self.device, self.input_size)
-        inp = torch.cat([pro, beam], dim=1)
-
-        if self.fp16:
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                residual = self.net(inp)
-        else:
-            residual = self.net(inp)
-
-        residual = residual.float()
-        restored = (pro - residual).clamp(-1, 1)
+    def _forward(self, distorted_bgr, light_bgr):
+        distorted = bgr_to_tensor(distorted_bgr, self.device, self.input_size)
+        light = bgr_to_tensor(light_bgr, self.device, self.input_size)
+        inp = torch.cat([distorted, light], dim=1)
+        residual = self.net(inp).float()
+        restored = (distorted - residual).clamp(-1, 1)
         return restored, residual
 
-    def restore(self, pro_bgr, beam_bgr):
-        restored, residual = self._forward(pro_bgr, beam_bgr)
+    def restore(self, distorted_bgr, light_bgr):
+        restored, residual = self._forward(distorted_bgr, light_bgr)
         return (tensor_to_bgr(restored, self.input_size),
                 residual_to_bgr(residual, self.input_size))
 
-    def restore_full(self, pro_bgr, beam_bgr):
+    def restore_full(self, distorted_bgr, light_bgr):
         """restore() plus mean |residual|, from one forward pass rather than two."""
-        restored, residual = self._forward(pro_bgr, beam_bgr)
+        restored, residual = self._forward(distorted_bgr, light_bgr)
         return (tensor_to_bgr(restored, self.input_size),
                 residual_to_bgr(residual, self.input_size),
                 float(residual.abs().mean()))
@@ -416,11 +444,22 @@ class RestormerLikeRestorer(BaseRestorer):
     def info(self) -> Dict:
         return {"name": self.name, "weights": os.path.abspath(str(self.weights)),
                 "params": self.params, "cfg": self.cfg.to_dict(),
-                "cfg_source": self.meta.get("cfg_source"), "fp16": self.fp16,
+                "cfg_source": self.meta.get("cfg_source"),
                 "input_size": list(self.input_size), "device": str(self.device)}
 
 
-def build_restorer(weights, device="cpu", cfg: RestorationConfig = None,
-                   input_size=(640, 360), fp16=False) -> RestormerLikeRestorer:
-    return RestormerLikeRestorer(weights, device=device, cfg=cfg,
-                                 input_size=input_size, fp16=fp16)
+def build_restorer(kind=ARCH_NAME, weights=None, device="cpu",
+                   cfg: RestorationConfig = None,
+                   input_size=(640, 360)) -> BaseRestorer:
+    """
+    Instantiate a registered restoration backend, the mirror of `build_detector`.
+
+    `cfg` is this architecture's ablation config; a backend that has no use for it
+    absorbs it through `**_`, exactly as `ssd` does with the yolo-only `imgsz`.
+    """
+    from .base import get_restorer_class
+
+    cls = get_restorer_class(kind)
+    if not weights:
+        raise ValueError(f"restorer '{kind}' needs a weights path")
+    return cls(weights, device=device, cfg=cfg, input_size=input_size)

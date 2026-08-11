@@ -25,31 +25,31 @@ data/
 ├── collect.py              프로젝터 + 웹캠으로 직접 데이터셋 수집
 ├── record.py               클립 투사 + 카메라 화면 녹화 (모델 불필요)
 ├── sample_input/           demo / evaluate / train 의 입력 *과* 정답
-│   ├── pro/    projected_<oriId>_<beamId>.jpg   22장, 640×360
-│   ├── beam/   output_video_<beamId>.jpg        22장, 1280×720 및 854×480
-│   ├── clean/  Ori<oriId>.jpg                   10장, 640×360
-│   └── labels/ Ori<oriId>.txt                   10개, 박스 107개
+│   ├── distorted/ distorted_<surfaceId>_<lightId>.jpg  22장, 640×360
+│   ├── light/     light_<lightId>.jpg                  22장, 1280×720 및 854×480
+│   ├── surface/   surface_<surfaceId>.jpg              10장, 640×360
+│   └── labels/ surface_<surfaceId>.txt                   10개, 박스 107개
 ├── live/                   demo.py --live 와 record.py 의 입력
 │   ├── BeamVideo.mp4       프로젝터로 재생할 클립
 │   │                       5,858프레임 @30fps = 3.3분, 854×480, 55 MiB
 │   └── BaseBackGround.jpg  캘리브레이션 중 표시할 배경, 1280×960
 ├── sample_video/           짧은 클립 2개, BeamVideo 대체용
-│                           4,262 / 5,381프레임 @30fps, 854×480, 23 MiB
+│                           4,262 / 5,381프레임 @30fps, 854×480 / 856×480, 23 MiB
 └── recordings/             record.py 출력 위치 (git 무시)
 ```
 
 | 경로 | 용도 |
 |---|---|
-| `sample_input/pro/` | 모델 입력 ch 0:3 — 투사된 스크린의 카메라 시점 |
-| `sample_input/beam/` | 모델 입력 ch 3:6 — 프로젝터가 내보낸 프레임 |
-| `sample_input/clean/` | 학습 타깃, PSNR/SSIM 기준 |
+| `sample_input/distorted/` | 모델 입력 ch 0:3 — 투사된 스크린의 카메라 시점 |
+| `sample_input/light/` | 모델 입력 ch 3:6 — 프로젝터가 내보낸 프레임 |
+| `sample_input/surface/` | 학습 타깃, PSNR/SSIM 기준 |
 | `sample_input/labels/` | mAP 기준, YOLO 포맷 |
 
-`clean/`과 `labels/`가 `sample_input/` 안에 있으므로 `--input`과 `--gt`가 같은 경로를 받는다.
+`surface/`과 `labels/`가 `sample_input/` 안에 있으므로 `--input`과 `--gt`가 같은 경로를 받는다.
 둘 다 선택 사항이다. 없어도 실행은 되고, 채점만 못 한다.
 
 이미지 크기는 맞출 필요가 없다. 전부 모델의 `input_size`(기본 640×360)로 리사이즈된다.
-그래서 `beam/`에 1280×720과 854×480이 섞여 있어도 별도 처리가 없다.
+그래서 `light/`에 1280×720과 854×480이 섞여 있어도 별도 처리가 없다.
 
 `data/`는 추적 기준 81 MiB이고 대부분이 영상이다 — `live/BeamVideo.mp4`(55 MiB)와
 `sample_video/`(23 MiB). 데이터셋 자체는 4.2 MiB다. `--live`나 `record.py`를 쓰지 않으면
@@ -63,30 +63,30 @@ data/
 이 규약만 지키면 실데이터가 그대로 들어온다.
 
 ```
-projected_0409001429_0404023332_294_75.jpg
+distorted_0409001429_0404023332_294_75.jpg
           └───┬────┘ └──────┬───────┘
-            oriId         beamId
+            surfaceId         lightId
 
-  → sample_input/clean/Ori0409001429.jpg                  (정답 스크린)
-  → sample_input/labels/Ori0409001429.txt                 (검출 정답)
-  → sample_input/beam/output_video_0404023332_294_75.jpg  (프로젝터가 내보낸 프레임)
+  → sample_input/surface/surface_0409001429.jpg                  (정답 스크린)
+  → sample_input/labels/surface_0409001429.txt                 (검출 정답)
+  → sample_input/light/light_0404023332_294_75.jpg  (프로젝터가 내보낸 프레임)
 ```
 
 | 역할 | 파일명 | 모델에서 |
 |---|---|---|
-| `pro` | `projected_<oriId>_<beamId>.jpg` | 입력 ch 0:3 |
-| `beam` | `output_video_<beamId>.jpg` | 입력 ch 3:6 |
-| `clean` | `Ori<oriId>.jpg` | 학습 타깃 / PSNR·SSIM 기준 |
-| `label` | `Ori<oriId>.txt` | 검출 mAP 기준 |
+| `distorted` | `distorted_<surfaceId>_<lightId>.jpg` | 입력 ch 0:3 |
+| `light` | `light_<lightId>.jpg` | 입력 ch 3:6 |
+| `surface` | `surface_<surfaceId>.jpg` | 학습 타깃 / PSNR·SSIM 기준 |
+| `label` | `surface_<surfaceId>.txt` | 검출 mAP 기준 |
 
-- `oriId`에 `_`를 쓰지 말 것. 첫 `_` 앞까지가 oriId로 잡힌다.
-- `beamId`에는 `_`가 들어가도 된다. 위 예시는 `0404023332_294_75`다.
-- `clean` 하나가 여러 `pro`를 받치는 것이 정상이다. 여기서는 clean 10장이 pro 22장을 받치고,
+- `surfaceId`에 `_`를 쓰지 말 것. 첫 `_` 앞까지가 surfaceId로 잡힌다.
+- `lightId`에는 `_`가 들어가도 된다. 위 예시는 `0404023332_294_75`다.
+- `surface` 하나가 여러 `distorted`를 받치는 것이 정상이다. 여기서는 surface 10장이 distorted 22장을 받치고,
   하나당 1~3장이다.
-- `beam`은 `pro`와 1:1이다.
+- `light`은 `distorted`와 1:1이다.
 - 인식 확장자: `.jpg` `.jpeg` `.png` `.bmp`.
-- 짝 `beam`이 없는 `pro`는 경고와 함께 스킵된다. 실행이 실패하지는 않는다.
-- `clean`과 `label`은 선택이다. `clean`이 없으면 PSNR/SSIM만 빠지고, `evaluate.py`는 둘 다
+- 짝 `light`이 없는 `distorted`는 경고와 함께 스킵된다. 실행이 실패하지는 않는다.
+- `surface`과 `label`은 선택이다. `surface`이 없으면 PSNR/SSIM만 빠지고, `evaluate.py`는 둘 다
   있는 샘플만 채점한다.
 
 ---
@@ -97,15 +97,16 @@ projected_0409001429_0404023332_294_75.jpg
 
 | 이름 | 폴더 |
 |---|---|
-| `flat` (여기서 사용) | `pro/` `beam/` (+ `clean/`) |
+| `flat` (여기서 사용) | `distorted/` `light/` (+ `surface/`) |
+| `legacy-flat` | `pro/` `beam/` (+ `clean/`) — 리네임 이전에 수집한 세션 |
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/sample_input --gt data/sample_input   # flat
+python demo.py --input data/sample_input                          # flat
 python demo.py --input /path/to/WarpData_0520                     # research
 ```
 
-한 폴더에 이미지가 그냥 흩어져 있으면 `mixed`로 처리되고, `projected_`와 `output_video_`
+한 폴더에 이미지가 그냥 흩어져 있으면 `mixed`로 처리되고, `distorted_`와 `light_`
 접두사로 나뉜다.
 
 ---
@@ -130,11 +131,11 @@ python demo.py --input /path/to/WarpData_0520                     # research
 ## `collect.py` — 리그로 데이터셋 만들기
 
 위 샘플 데이터셋도 이 방식으로 만들었다. 4단계, 순서대로. `check`와 `capture`는 프로젝터와
-웹캠을 구동하고, `beam`과 `warp`는 순수 파일 작업이라 어디서든 돈다.
+웹캠을 구동하고, `light`과 `warp`는 순수 파일 작업이라 어디서든 돈다.
 
 ```bash
 python data/collect.py check                                   # 모니터 + 웹캠
-python data/collect.py beam    --src data/live/BeamVideo.mp4    # 영상 -> beam 프레임
+python data/collect.py light   --src data/live/BeamVideo.mp4  # 영상 -> light 프레임
 python data/collect.py capture --screen 2 --rounds 3            # 투사하며 촬영
 python data/collect.py warp                                     # 정류해 쌍으로
 ```
@@ -144,19 +145,18 @@ python data/collect.py warp                                     # 정류해 쌍�
 
 ```
 data/collected_<MMDD>/
-├── beam/   output_video_<beamId>.jpg           [beam]     프로젝터가 내보내는 것
-├── raw/    ori/Ori<oriId>.jpg                  [capture]  카메라 프레임, 정류 전
-│           pro/projected_<oriId>_<beamId>.jpg  [capture]
-├── clean/  Ori<oriId>.jpg                      [warp]     정류됨, 640×360
-├── pro/    projected_<oriId>_<beamId>.jpg      [warp]     정류됨, 640×360
-├── debug/  <oriId>_warp.jpg                    [warp]     전/후 확인용
-└── collect_meta.json                           단계별 설정과 개수
+├── light/      light_<lightId>.jpg                    [light]    프로젝터가 내보내는 것
+├── raw/        surface/surface_<surfaceId>.jpg        [capture]  카메라 프레임, 정류 전
+│               distorted/distorted_<surfaceId>_<lightId>.jpg     [capture]
+├── surface/    surface_<surfaceId>.jpg                [warp]     정류됨, 640×360
+├── distorted/  distorted_<surfaceId>_<lightId>.jpg    [warp]     정류됨, 640×360
+├── debug/      <surfaceId>_warp.jpg                   [warp]     전/후 확인용
+└── collect_meta.json                                  단계별 설정과 개수
 ```
 
 ```bash
-python demo.py  --input data/collected_0803 --gt data/collected_0803
-python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803/beam \
-                --clean-dir data/collected_0803/clean
+python demo.py  --input data/collected_0803
+python train.py --data-root data/collected_0803
 ```
 
 ### 카메라 플래그
@@ -179,12 +179,12 @@ python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803
   --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
 ```
 
-### `beam` — 영상 → beam 프레임
+### `light` — 영상 → light 프레임
 
 | 옵션 | 기본값 | 의미 |
 |---|---|---|
 | `--src <path>` | `data/live/BeamVideo.mp4` | 영상 파일, 또는 영상이 든 폴더 |
-| `--out <dir>` | `<root>/beam` | — |
+| `--out <dir>` | `<root>/light` | — |
 | `--step N` | `30` | N프레임마다 유지. 30이면 30fps에서 초당 1장 |
 | `--size W H` | `1280 720` | `0 0`이면 원본 해상도 유지 |
 | `--quality N` | `95` | JPEG 품질 |
@@ -196,26 +196,26 @@ python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803
 | 옵션 | 기본값 | 의미 |
 |---|---|---|
 | `--screen N` | `1` | 프로젝터가 붙은 모니터. `check`가 표를 출력한다 |
-| `--beam <dir>` | `<root>/beam` | — |
-| `--background <path>` | `data/live/BaseBackGround.jpg` | clean 샷을 찍는 동안 투사할 이미지 |
-| `--rounds N` | `1` | 장면 세팅 수. 각 라운드는 새 clean 샷으로 시작 |
-| `--limit N` | `0` | 라운드당 beam 프레임 수 |
-| `--shuffle` | off | beam 순서 랜덤화. 짧은 라운드도 클립 전체를 커버 |
+| `--light <dir>` | `<root>/light` | — |
+| `--background <path>` | `data/live/BaseBackGround.jpg` | surface 샷을 찍는 동안 투사할 이미지 |
+| `--rounds N` | `1` | 장면 세팅 수. 각 라운드는 새 surface 샷으로 시작 |
+| `--limit N` | `0` | 라운드당 light 프레임 수 |
+| `--shuffle` | off | light 순서 랜덤화. 짧은 라운드도 클립 전체를 커버 |
 | `--seed N` | `42` | `--shuffle`용 |
 | `--settle-ms N` | `150` | 프레임 표시 후 촬영까지 대기 |
 | `--flush N` | `3` | 촬영 전 버릴 버퍼 카메라 프레임 수 |
-| `--round-settle F` | `2.0` | clean 샷과 첫 투사 사이 대기 초 |
+| `--round-settle F` | `2.0` | surface 샷과 첫 투사 사이 대기 초 |
 | `--preview-every N` | `10` | N프레임마다 촬영 프리뷰 갱신 |
 | `--jpeg-quality N` | `95` | — |
 
-**라운드 동작.** `capture`는 배경을 투사한 뒤 `s` 입력을 기다린다. 그 샷이 `clean`이 된다 —
+**라운드 동작.** `capture`는 배경을 투사한 뒤 `s` 입력을 기다린다. 그 샷이 `surface`이 된다 —
 아무것도 투사되지 않은 장면이므로, 물체를 배치하고 프레임 밖으로 나간 뒤 눌러야 한다. 그
-타임스탬프가 `oriId`가 되고 해당 라운드의 모든 촬영본이 그것을 물고 간다. 그래서 여러 `pro`가
-하나의 `clean`을 가리키게 된다. 그다음 각 beam 프레임을 한 번 투사하고 한 번 촬영한다.
+타임스탬프가 `surfaceId`가 되고 해당 라운드의 모든 촬영본이 그것을 물고 간다. 그래서 여러 `distorted`가
+하나의 `surface`을 가리키게 된다. 그다음 각 light 프레임을 한 번 투사하고 한 번 촬영한다.
 `--rounds N`은 새 장면으로 반복한다.
 
-**타이밍.** `--settle-ms`와 `--flush`가 촬영본을 그 원인이 된 프레임에 맞춰준다. `pro`가
-*이전* beam 프레임처럼 보이면 둘 다 올린다.
+**타이밍.** `--settle-ms`와 `--flush`가 촬영본을 그 원인이 된 프레임에 맞춰준다. `distorted`가
+*이전* light 프레임처럼 보이면 둘 다 올린다.
 
 ### `warp` — 정렬된 쌍으로 정류
 
@@ -224,7 +224,7 @@ python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803
 | `--warp boundary` | 기본 | 4코너 + 측정된 에지 휨 |
 | `--warp homography` | — | 코너만. 평평한 스크린 + 깔끔한 경계일 때 |
 | `--warp tps` | — | 레거시 thin-plate spline. `opencv-python<5` 필요 |
-| `--ori <dir>` · `--pro <dir>` | `<root>/raw/ori` · `<root>/raw/pro` | — |
+| `--surface <dir>` · `--distorted <dir>` | `<root>/raw/surface` · `<root>/raw/distorted` | — |
 | `--points N` | `20` | 경계 대응점 수 (tps와 디버그 오버레이용) |
 | `--inset N` | `2` | 밝은 투사 테두리를 피해 경계를 당길 픽셀 |
 | `--work-size W H` | `1280 720` | 정류 작업 해상도 |
@@ -233,20 +233,20 @@ python train.py --pro-dir data/collected_0803/pro --beam-dir data/collected_0803
 | `--no-debug` | off | `<root>/debug/`의 전/후 오버레이 생략 |
 
 **존재 이유.** 카메라에서 스크린은 사다리꼴이고 물체 스케일도 촬영마다 다르다. 이 단계 전에는
-학습이 불가능하다. `warp`는 clean 샷에서 스크린 경계를 찾고, 그 장면의 clean 프레임 *과*
+학습이 불가능하다. `warp`는 surface 샷에서 스크린 경계를 찾고, 그 장면의 surface 프레임 *과*
 해당 촬영본 전부를 동일한 매핑으로 정류한다. 결과적으로 쌍이 픽셀 그리드를 공유하게 되고,
 남는 차이는 투사광뿐이다.
 
 `boundary`는 비스듬히 본 평면 스크린에 대해 정확하고, 에지가 휘어도 유효하다. OpenCV 5는
 `tps`가 필요한 shape 모듈을 제거했다.
 
-긴 세션에 들어가기 전에 짧게 시험하고 `<session>/debug/<oriId>_warp.jpg`를 확인할 것. 검출된
+긴 세션에 들어가기 전에 짧게 시험하고 `<session>/debug/<surfaceId>_warp.jpg`를 확인할 것. 검출된
 경계, 샘플링된 점, 정류 결과가 한 장에 함께 나온다.
 
 ### 라벨은 수집되지 않는다
 
-`evaluate.py`로 mAP을 채점하려면 `clean/`을 손으로 라벨링해
-`<session>/labels/Ori<oriId>.txt`로 넣어야 한다. 복원 학습과 PSNR/SSIM에는 라벨이 필요 없다.
+`evaluate.py`로 mAP을 채점하려면 `surface/`를 손으로 라벨링해
+`<session>/labels/surface_<surfaceId>.txt`로 넣어야 한다. 복원 학습과 PSNR/SSIM에는 라벨이 필요 없다.
 
 ---
 
@@ -310,12 +310,12 @@ python demo.py
 python evaluate.py
 
 # 2) 또는 원본 데이터셋을 직접 지정
-python demo.py --input /mnt/.../WarpData_0520 --gt /mnt/.../WarpData_0520
+python demo.py --input /mnt/.../WarpData_0520
 ```
 
 학습은 세 디렉터리를
 [configs/restoration.yaml](../projector_distortion/configs/restoration.yaml)의 `train.data`에서
-읽는다. 각 항목은 디렉터리, glob, 리스트를 받는다. 우선순위, `--data-root` 폴백, clean 타깃
+읽는다. 각 항목은 디렉터리, glob, 리스트를 받는다. 우선순위, `--data-root` 폴백, surface 타깃
 탐색 순서:
 [README_running.ko.md](../README_running.ko.md#학습-데이터가-오는-곳).
 

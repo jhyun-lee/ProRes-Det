@@ -8,11 +8,11 @@
 복원 모델과 검출기 모두 작은 인터페이스 뒤에 있어, 파이프라인을 건드리지 않고 교체할 수 있다.
 
 ```
-        카메라 촬영 (pro)  ─┐
-                            ├─▶ 복원기 ─▶ residual ─▶ restored = pro − residual
-   투사된 원본 (beam)  ────┘                            │
+        카메라 촬영 (distorted)  ─┐
+                            ├─▶ 복원기 ─▶ residual ─▶ restored = distorted − residual
+   투사된 원본 (light)  ────┘                            │
                                                         │
-           detector(pro) ◀── 복원 전            복원 후 ──▶ detector(restored)
+           detector(distorted) ◀── 복원 전            복원 후 ──▶ detector(restored)
                   └────────── 비교: mAP / PSNR / SSIM ──────────┘
 ```
 
@@ -106,9 +106,9 @@ ProRes-Det/
 │   ├── configs/              기본 설정 (YAML)
 │   ├── models/               복원 + 검출 모델
 │   ├── pipeline/             오프라인 / 라이브 실행 루프
-│   └── utils/                이미지, 시각화, 기록 헬퍼
+│   └── utils/                이미지, 시각화, 기록, 디스플레이 헬퍼
 │
-├── tests/                    pytest 스위트, 102개
+├── tests/                    pytest 스위트, 107개
 ├── weights/                  체크포인트 3개, 51 MiB, git 추적
 ├── data/                     샘플 데이터셋 + collect.py / record.py, 추적 81 MiB
 └── output/                   실행 산출물 (git 무시)
@@ -171,17 +171,52 @@ class MyDetector(BaseDetector):
 이게 변경 사항 전부다. `--detector mydet`이 즉시 동작하고, 파이프라인·기록·평가 코드는
 그대로다.
 
-### 복원기 교체
+### 복원기 추가
 
-`BaseRestorer`를 상속하고 `restore(pro_bgr, beam_bgr) -> (restored_bgr, residual_bgr)`만
-구현한다. 인터페이스는 이것뿐이다.
+같은 모양에 레지스트리 하나 더:
 
-기본 네트워크는 clean 이미지가 아니라 **빼낼 residual**을 예측한다:
+```python
+from projector_distortion.models import BaseRestorer, register_restorer
+
+@register_restorer("myrest")
+class MyRestorer(BaseRestorer):
+    name = "myrest"
+
+    def __init__(self, weights, device="cpu", input_size=(640, 360), **_):
+        self.input_size = tuple(input_size)
+        self.net = load_my_model(weights)
+
+    def restore(self, distorted_bgr, light_bgr):
+        restored = self.net(distorted_bgr)            # `light`은 제공될 뿐, 필수 아님
+        return restored, residual_or_zeros
+```
+
+```bash
+python demo.py --restorer myrest --restorer-weights path/to.pt
+```
+
+명령줄을 건드리지 않으려면:
+
+```yaml
+# my_rest.yaml
+model:
+  backend: myrest
+  weights: path/to.pt
+```
+
+`light`(그 순간 프로젝터가 쏜 프레임)을 모든 복원기에 넘기는 이유는, 그것이 ProCam 리그에는
+있고 일반 복원 환경에는 없는 유일한 신호이기 때문이다. 단일 이미지 백엔드는 그냥 무시하면
+된다.
+
+두 번째 반환값은 residual 뷰다. surface 이미지를 직접 예측하는 백엔드는 여기에 0을 넣으면
+된다. 패널의 residual 타일과 `residual_mean`만 의미를 잃고, 채점은 그대로 된다.
+
+기본 네트워크는 surface 이미지가 아니라 **빼낼 residual**을 예측한다:
 
 ```
-input   (B, 6, H, W) = cat([pro, beam])  in [-1, 1]
+input   (B, 6, H, W) = cat([distorted, light])  in [-1, 1]
 output  (B, 3, H, W) = residual
-restored = (pro - residual).clamp(-1, 1)
+restored = (distorted - residual).clamp(-1, 1)
 ```
 
 이 규약이 왜 중요하고 손실 함수가 어떻게 강제하는지:

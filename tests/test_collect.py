@@ -123,22 +123,22 @@ def test_warp_stage_writes_a_dataset_the_loaders_accept(bgr_image):
     capture = _capture(source)
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/ori", "raw/pro", "beam"):
+        for sub in ("raw/surface", "raw/distorted", "light"):
             os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        cv2.imwrite(os.path.join(tmp, "raw", "ori", "Ori0409001429.jpg"), capture)
-        cv2.imwrite(os.path.join(tmp, "raw", "pro",
-                                 "projected_0409001429_0803120000_1000_0.jpg"), capture)
-        cv2.imwrite(os.path.join(tmp, "beam", "output_video_0803120000_1000_0.jpg"),
-                    source)
+        cv2.imwrite(os.path.join(tmp, "raw", "surface", "surface_0409001429.jpg"),
+                    capture)
+        cv2.imwrite(os.path.join(tmp, "raw", "distorted",
+                                 "distorted_0409001429_0803120000_1000_0.jpg"), capture)
+        cv2.imwrite(os.path.join(tmp, "light", "light_0803120000_1000_0.jpg"), source)
 
         assert collect.main(["warp", "--root", tmp, "--inset", "0"]) == 0
 
         samples = find_samples(tmp, gt_root=tmp)
         assert len(samples) == 1
-        assert samples[0].ori_id == "0409001429"
-        assert samples[0].clean and os.path.basename(samples[0].clean) == \
-            "Ori0409001429.jpg"
-        for path in (samples[0].pro, samples[0].clean):
+        assert samples[0].surface_id == "0409001429"
+        assert samples[0].surface and os.path.basename(samples[0].surface) == \
+            "surface_0409001429.jpg"
+        for path in (samples[0].distorted, samples[0].surface):
             img = cv2.imread(path)
             assert (img.shape[1], img.shape[0]) == (640, 360)
         assert os.listdir(os.path.join(tmp, "debug")) == ["0409001429_warp.jpg"]
@@ -148,46 +148,48 @@ def test_warp_stage_writes_a_dataset_the_loaders_accept(bgr_image):
 
 
 def test_limit_does_not_mistake_skipped_scenes_for_orphans(bgr_image, capsys):
-    """--limit leaves scenes unprocessed; their clean shots still exist."""
+    """--limit leaves scenes unprocessed; their surface shots still exist."""
     capture = _capture(cv2.resize(bgr_image, SIZE))
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/ori", "raw/pro"):
+        for sub in ("raw/surface", "raw/distorted"):
             os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        for oid in ("0409001429", "0409232547"):
-            cv2.imwrite(os.path.join(tmp, "raw", "ori", f"Ori{oid}.jpg"), capture)
-            cv2.imwrite(os.path.join(tmp, "raw", "pro",
-                                     f"projected_{oid}_0803120000_1000_0.jpg"), capture)
+        for sid in ("0409001429", "0409232547"):
+            cv2.imwrite(os.path.join(tmp, "raw", "surface", f"surface_{sid}.jpg"),
+                        capture)
+            cv2.imwrite(os.path.join(tmp, "raw", "distorted",
+                                     f"distorted_{sid}_0803120000_1000_0.jpg"), capture)
 
         assert collect.main(["warp", "--root", tmp, "--inset", "0",
                              "--limit", "1", "--no-debug"]) == 0
-        assert "no clean shot" not in capsys.readouterr().out
+        assert "no surface shot" not in capsys.readouterr().out
 
         with open(os.path.join(tmp, "collect_meta.json"), encoding="utf-8") as f:
-            assert json.load(f)["warp"]["orphan_ori_ids"] == []
+            assert json.load(f)["warp"]["orphan_surface_ids"] == []
 
 
-def test_captures_without_a_clean_shot_are_still_reported(bgr_image, capsys):
+def test_captures_without_a_surface_shot_are_still_reported(bgr_image, capsys):
     capture = _capture(cv2.resize(bgr_image, SIZE))
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/ori", "raw/pro"):
+        for sub in ("raw/surface", "raw/distorted"):
             os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        cv2.imwrite(os.path.join(tmp, "raw", "ori", "Ori0409001429.jpg"), capture)
-        cv2.imwrite(os.path.join(tmp, "raw", "pro",
-                                 "projected_9999999999_0803120000_1000_0.jpg"), capture)
+        cv2.imwrite(os.path.join(tmp, "raw", "surface", "surface_0409001429.jpg"),
+                    capture)
+        cv2.imwrite(os.path.join(tmp, "raw", "distorted",
+                                 "distorted_9999999999_0803120000_1000_0.jpg"), capture)
 
         assert collect.main(["warp", "--root", tmp, "--inset", "0", "--no-debug"]) == 0
         assert "9999999999" in capsys.readouterr().out
 
 
-def test_beam_stage_ids_survive_the_filename_convention():
-    """`beamId` is parsed off the first '_', so the timestamp tag must not carry one."""
-    from projector_distortion.data import beam_id, ori_id
+def test_light_stage_ids_survive_the_filename_convention():
+    """`lightId` is parsed off the first '_', so the timestamp tag must not carry one."""
+    from projector_distortion.data import light_id, surface_id
 
-    name = "output_video_0803120000_1000_600.jpg"
-    assert beam_id(name) == "0803120000_1000_600"
-    assert ori_id(f"projected_0409001429_{beam_id(name)}.jpg") == "0409001429"
+    name = "light_0803120000_1000_600.jpg"
+    assert light_id(name) == "0803120000_1000_600"
+    assert surface_id(f"distorted_0409001429_{light_id(name)}.jpg") == "0409001429"
 
 
 # --- live warp evidence -------------------------------------------------------

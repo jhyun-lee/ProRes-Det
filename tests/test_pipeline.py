@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import tempfile
+import time
 
 import cv2
 import numpy as np
@@ -12,22 +13,29 @@ import pytest
 from conftest import RESTORER_W, SAMPLE_INPUT, SSD_W, needs_restorer, \
     needs_samples, needs_ssd
 from projector_distortion.data import (
-    beam_id, find_samples, load_yolo_labels, ori_id, resolve_dirs,
+    find_samples, light_id, load_yolo_labels, resolve_dirs, surface_id,
 )
 from projector_distortion.utils.image import iou, psnr, resize, ssim
-from projector_distortion.utils.recording import (
-    DEFAULT_FRAME_KINDS, FRAME_KINDS, RunRecorder, estimate_footprint_mb, parse_kinds,
-)
+from projector_distortion.utils.recording import FRAME_KINDS, RunRecorder, parse_kinds
 
 
 # --- filename convention ------------------------------------------------------
 
 def test_ids_are_parsed_from_the_filename():
-    pro = "projected_0409001429_0404023332_294_75.jpg"
-    assert ori_id(pro) == "0409001429"
-    assert beam_id(pro) == "0404023332_294_75", "beamId may contain underscores"
-    assert ori_id("Ori0409001429.jpg") == "0409001429"
-    assert beam_id("output_video_0404023332_294_75.jpg") == "0404023332_294_75"
+    distorted = "distorted_0409001429_0404023332_294_75.jpg"
+    assert surface_id(distorted) == "0409001429"
+    assert light_id(distorted) == "0404023332_294_75", "lightId may contain underscores"
+    assert surface_id("surface_0409001429.jpg") == "0409001429"
+    assert light_id("light_0404023332_294_75.jpg") == "0404023332_294_75"
+
+
+def test_pre_rename_filenames_are_still_parsed():
+    """Sessions collected before the rename must keep loading."""
+    legacy = "projected_0409001429_0404023332_294_75.jpg"
+    assert surface_id(legacy) == "0409001429"
+    assert light_id(legacy) == "0404023332_294_75"
+    assert surface_id("Ori0409001429.jpg") == "0409001429"
+    assert light_id("output_video_0404023332_294_75.jpg") == "0404023332_294_75"
 
 
 def test_unrecognised_layout_is_reported():
@@ -43,20 +51,20 @@ def test_sample_discovery_pairs_everything():
     samples = find_samples(SAMPLE_INPUT, gt_root=SAMPLE_INPUT)
     assert samples, "no pairs discovered"
     for s in samples:
-        assert os.path.exists(s.pro) and os.path.exists(s.beam)
-        assert beam_id(s.pro) == beam_id(s.beam)
-        assert ori_id(s.pro) == s.ori_id
+        assert os.path.exists(s.distorted) and os.path.exists(s.light)
+        assert light_id(s.distorted) == light_id(s.light)
+        assert surface_id(s.distorted) == s.surface_id
 
 
 @needs_samples
 def test_ground_truth_is_attached_when_present():
     samples = find_samples(SAMPLE_INPUT, gt_root=SAMPLE_INPUT)
-    with_gt = [s for s in samples if s.clean]
-    assert with_gt, "no sample resolved a clean target"
+    with_gt = [s for s in samples if s.surface]
+    assert with_gt, "no sample resolved a surface target"
     for s in with_gt:
-        assert ori_id(s.clean) == s.ori_id
+        assert surface_id(s.surface) == s.surface_id
         if s.label:
-            assert ori_id(s.label) == s.ori_id
+            assert surface_id(s.label) == s.surface_id
 
 
 @needs_samples
@@ -116,14 +124,13 @@ def test_iou_edges():
 
 def test_default_kinds_keep_the_un_annotated_footage():
     """captures/ is what survives for a later re-analysis, so it must stay on."""
-    assert {"distorted", "restored"} <= set(DEFAULT_FRAME_KINDS)
-    assert set(DEFAULT_FRAME_KINDS) <= set(FRAME_KINDS)
+    assert {"distorted", "restored"} <= set(FRAME_KINDS)
 
 
 def test_derived_views_are_not_written_as_separate_files():
     """They are tiles of the panel; a jpg each cost encodes per frame and bought nothing."""
     assert set(FRAME_KINDS) == {"distorted", "restored", "panel"}
-    for gone in ("beam", "distorted_det", "restored_det", "residual", "raw"):
+    for gone in ("light", "distorted_det", "restored_det", "residual", "raw"):
         assert gone not in FRAME_KINDS
 
 
@@ -133,19 +140,12 @@ def test_parse_kinds_validates():
         parse_kinds("restored,nope")
 
 
-def test_footprint_estimate_scales_with_interval():
-    every1 = estimate_footprint_mb(FRAME_KINDS, 1, 1000)
-    every10 = estimate_footprint_mb(FRAME_KINDS, 10, 1000)
-    assert every1 == pytest.approx(every10 * 10, rel=0.01)
-    assert estimate_footprint_mb(FRAME_KINDS, 0, 1000) == 0.0
-
-
 def _fake_result(frame_id=0, n_boxes=1):
     from projector_distortion.models import Detection
     from projector_distortion.pipeline.offline import FrameResult
     img = np.full((180, 320, 3), 64, np.uint8)
     dets = [Detection(0, "Apple", 0.9, (10, 10, 80, 80))] * n_boxes
-    return FrameResult(frame_id=frame_id, name_id=f"f{frame_id:03d}", beam=img.copy(),
+    return FrameResult(frame_id=frame_id, name_id=f"f{frame_id:03d}", light=img.copy(),
                        distorted=img.copy(), distorted_det=img.copy(),
                        restored=img.copy(), restored_det=img.copy(),
                        residual=img.copy(), residual_mean=0.12,
@@ -227,42 +227,43 @@ def _write_triplet(root, sub, name, img):
 
 
 def test_training_set_can_span_several_directories(bgr_image):
-    """Real captures are date-partitioned and the beam frames sit apart from them."""
+    """Real captures are date-partitioned and the light frames sit apart from them."""
     from projector_distortion.data import index_triplets
 
     img = cv2.resize(bgr_image, (64, 36))
     with tempfile.TemporaryDirectory() as tmp:
-        for date, oid, beam in (("0520", "0407005538", "0404023034_1008_142"),
-                                ("0529", "0529131031", "0404023034_1032_invert")):
-            _write_triplet(tmp, f"Warp_{date}_pro",
-                           f"projected_{oid}_{beam}.jpg", img)
-            _write_triplet(tmp, f"Warp_{date}_ori", f"Ori{oid}.jpg", img)
-            _write_triplet(tmp, "beams", f"output_video_{beam}.jpg", img)
+        for date, sid, light in (("0520", "0407005538", "0404023034_1008_142"),
+                                 ("0529", "0529131031", "0404023034_1032_invert")):
+            _write_triplet(tmp, f"Warp_{date}_distorted",
+                           f"distorted_{sid}_{light}.jpg", img)
+            _write_triplet(tmp, f"Warp_{date}_surface", f"surface_{sid}.jpg", img)
+            _write_triplet(tmp, "lights", f"light_{light}.jpg", img)
 
-        triplets = index_triplets(pro=os.path.join(tmp, "Warp_*_pro"),
-                                  clean=os.path.join(tmp, "Warp_*_ori"),
-                                  beam=os.path.join(tmp, "beams"))
+        triplets = index_triplets(distorted=os.path.join(tmp, "Warp_*_distorted"),
+                                  surface=os.path.join(tmp, "Warp_*_surface"),
+                                  light=os.path.join(tmp, "lights"))
         assert len(triplets) == 2, triplets
-        for pro, clean, beam in triplets:
-            assert ori_id(pro) == ori_id(clean)
-            assert beam_id(pro) == beam_id(beam)
+        for distorted, surface, light in triplets:
+            assert surface_id(distorted) == surface_id(surface)
+            assert light_id(distorted) == light_id(light)
 
 
-def test_pro_without_a_clean_is_skipped_not_fatal(bgr_image):
+def test_distorted_without_a_surface_is_skipped_not_fatal(bgr_image):
     from projector_distortion.data import index_triplets
 
     img = cv2.resize(bgr_image, (64, 36))
     with tempfile.TemporaryDirectory() as tmp:
-        _write_triplet(tmp, "pro", "projected_0409001429_aaa_1.jpg", img)
-        _write_triplet(tmp, "pro", "projected_9999999999_aaa_1.jpg", img)  # no clean
-        _write_triplet(tmp, "ori", "Ori0409001429.jpg", img)
-        _write_triplet(tmp, "beams", "output_video_aaa_1.jpg", img)
+        _write_triplet(tmp, "distorted", "distorted_0409001429_aaa_1.jpg", img)
+        # no surface
+        _write_triplet(tmp, "distorted", "distorted_9999999999_aaa_1.jpg", img)
+        _write_triplet(tmp, "surface", "surface_0409001429.jpg", img)
+        _write_triplet(tmp, "lights", "light_aaa_1.jpg", img)
 
-        triplets = index_triplets(pro=os.path.join(tmp, "pro"),
-                                  clean=os.path.join(tmp, "ori"),
-                                  beam=os.path.join(tmp, "beams"))
+        triplets = index_triplets(distorted=os.path.join(tmp, "distorted"),
+                                  surface=os.path.join(tmp, "surface"),
+                                  light=os.path.join(tmp, "lights"))
         assert len(triplets) == 1
-        assert ori_id(triplets[0][0]) == "0409001429"
+        assert surface_id(triplets[0][0]) == "0409001429"
 
 
 def test_eval_dir_is_named_after_the_input_dataset():
@@ -326,13 +327,13 @@ def test_writer_thread_drains_its_queue_before_stopping():
         assert sorted({int(r["frame_id"]) for r in rows}) == [0, 1, 2, 3, 4]
 
 
-def test_max_saved_frames_caps_output():
+def test_save_every_thins_what_lands_on_disk():
     with tempfile.TemporaryDirectory() as tmp:
-        with RunRecorder(tmp, save_every=1, max_saved_frames=2) as rec:
-            for i in range(6):
+        with RunRecorder(tmp, save_every=3) as rec:
+            for i in range(9):
                 if rec.should_save(i):
                     rec.save_frame_images(_fake_result(i))
-            assert rec.saved_frames == 2
+            assert rec.saved_frames == 3, "frames 0, 3 and 6"
 
 
 def test_run_meta_is_valid_json():
@@ -351,16 +352,16 @@ def test_run_meta_is_valid_json():
 @needs_ssd
 @needs_samples
 def test_offline_run_produces_clean_and_annotated_images():
-    """The regression this framework exists to prevent: clean copies must survive."""
+    """The regression this framework exists to prevent: un-annotated copies must survive."""
     from projector_distortion.models import build_detector
-    from projector_distortion.models.restoration import RestormerLikeRestorer
+    from projector_distortion.models.restoration import NAFSEUNetRestorer
     from projector_distortion.pipeline import run_offline
 
-    restorer = RestormerLikeRestorer(RESTORER_W, device="cpu", input_size=(320, 180))
+    restorer = NAFSEUNetRestorer(RESTORER_W, device="cpu", input_size=(320, 180))
     detector = build_detector("ssd", weights=SSD_W, conf=0.05, device="cpu")
 
     with tempfile.TemporaryDirectory() as tmp:
-        # every kind, not the default subset: this test guards the clean copies
+        # every kind, not the default subset: this test guards the un-annotated copies
         with RunRecorder(tmp, save_every=1, frame_kinds=FRAME_KINDS) as rec:
             summary = run_offline(SAMPLE_INPUT, restorer, detector, rec,
                                   limit=2, progress=False)
@@ -395,10 +396,10 @@ def test_offline_run_produces_clean_and_annotated_images():
 @needs_samples
 def test_annotated_image_differs_once_boxes_exist():
     from projector_distortion.models import build_detector
-    from projector_distortion.models.restoration import RestormerLikeRestorer
+    from projector_distortion.models.restoration import NAFSEUNetRestorer
     from projector_distortion.pipeline import process_sample
 
-    restorer = RestormerLikeRestorer(RESTORER_W, device="cpu", input_size=(320, 180))
+    restorer = NAFSEUNetRestorer(RESTORER_W, device="cpu", input_size=(320, 180))
     detector = build_detector("ssd", weights=SSD_W, conf=0.01, device="cpu")
     samples = find_samples(SAMPLE_INPUT, gt_root=SAMPLE_INPUT)
 
@@ -417,7 +418,7 @@ def test_demo_parser_defaults_are_coherent():
     import demo
     args = demo.build_parser().parse_args([])
     assert args.save_every == 1 and args.live is False
-    assert parse_kinds(args.save_kinds) == DEFAULT_FRAME_KINDS
+    assert parse_kinds(args.save_kinds) == FRAME_KINDS
 
 
 def test_cuda_requirements_pin_matched_torch_torchvision_pairs():
@@ -483,8 +484,8 @@ def test_device_note_names_the_gpu_when_there_is_one():
 
 def test_evaluate_parser_accepts_multiple_backends():
     import evaluate
-    args = evaluate.build_parser().parse_args(["--detectors", "yolo,ssd", "--iou", "0.75"])
-    assert args.detectors == "yolo,ssd" and args.iou == 0.75
+    args = evaluate.build_parser().parse_args(["--detector", "yolo,ssd", "--iou", "0.75"])
+    assert args.detector == "yolo,ssd" and args.iou == 0.75
 
 
 def test_demo_rejects_an_unknown_save_kind():
@@ -505,3 +506,115 @@ def test_average_precision_is_sane():
 def test_average_precision_with_no_ground_truth_is_nan():
     from evaluate import average_precision
     assert np.isnan(average_precision([1], [0.9], 0))
+
+
+def test_live_worker_consumes_the_frame_queue_tuple():
+    """
+    The live worker's queue payload, with stubs standing in for the rig.
+
+    It is (frame_id, distorted, light) - the raw camera frame used to ride along
+    unused, pinning a full-resolution image per queue slot. Nothing else exercises
+    live.py without a projector, so the contract is checked here.
+    """
+    import queue
+    import threading
+
+    from projector_distortion.models.base import Detection
+    from projector_distortion.pipeline.live import _worker
+
+    class StubRestorer:
+        input_size = (640, 360)
+
+        def restore_full(self, distorted, light):
+            blank = np.zeros((360, 640, 3), np.uint8)
+            return blank, blank.copy(), 0.25
+
+    class StubDetector:
+        name = "stub"
+
+        def __call__(self, bgr):
+            return [Detection(0, "Apple", 0.9, (10, 10, 200, 200))]
+
+    frame_queue, result_queue, write_queue = queue.Queue(3), queue.Queue(5), queue.Queue(8)
+    stop = threading.Event()
+    worker = threading.Thread(
+        target=_worker, daemon=True,
+        args=(frame_queue, result_queue, write_queue, StubRestorer(), StubDetector(),
+              stop))
+    worker.start()
+    try:
+        frame_queue.put((7, np.full((720, 1280, 3), 40, np.uint8),
+                         np.full((360, 640, 3), 90, np.uint8)))
+        result, panel = result_queue.get(timeout=15)
+    finally:
+        stop.set()
+        worker.join(timeout=3)
+
+    assert result.frame_id == 7 and result.name_id == "frame_000007"
+    assert len(result.det_distorted) == 1 and len(result.det_restored) == 1
+    assert result.residual_mean == 0.25
+    assert panel.ndim == 3 and panel.size > 0
+    assert not write_queue.empty(), "the writer thread has to be handed the frame"
+
+
+def test_live_worker_reports_a_result_it_could_not_hand_back():
+    """
+    A full result queue must not lose the frame silently.
+
+    The main loop counts handed-over frames in `in_flight` and only ever decrements
+    on receipt, so a dropped result left the count permanently high: the final drain
+    then waited out its whole 10s timeout and blamed the straggler on a missed
+    deadline. The worker reports the id instead.
+    """
+    import queue
+    import threading
+
+    from projector_distortion.pipeline.live import _worker
+
+    class StubRestorer:
+        input_size = (640, 360)
+
+        def restore_full(self, distorted, light):
+            blank = np.zeros((360, 640, 3), np.uint8)
+            return blank, blank.copy(), 0.0
+
+    frame_queue = queue.Queue(3)
+    result_queue = queue.Queue(1)
+    result_queue.put(("already", "full"))          # nobody is draining
+    lost = []
+    stop = threading.Event()
+    worker = threading.Thread(
+        target=_worker, daemon=True,
+        args=(frame_queue, result_queue, queue.Queue(8), StubRestorer(),
+              lambda bgr: [], stop, lost))
+    worker.start()
+    try:
+        frame_queue.put((11, np.zeros((360, 640, 3), np.uint8),
+                         np.zeros((360, 640, 3), np.uint8)))
+        deadline = time.time() + 20
+        while not lost and time.time() < deadline:
+            time.sleep(0.05)
+    finally:
+        stop.set()
+        worker.join(timeout=3)
+
+    assert lost == [11], f"the dropped frame id should be reported, got {lost}"
+
+
+@needs_restorer
+def test_an_unknown_backend_is_named_as_such_not_blamed_on_its_weights():
+    """
+    `--detector` is validated against the registry, and before the weights lookup.
+
+    An unrecognised backend has no `weights:` entry either, so checking the
+    checkpoint first reported a missing file for a merely misspelled name.
+    """
+    import demo
+    from projector_distortion.cli import build_models
+
+    args = demo.build_parser().parse_args(["--detector", "bogus"])
+    with pytest.raises(SystemExit) as e:
+        build_models(args, need_detector=True)
+    message = str(e.value)
+    assert "unknown detector 'bogus'" in message
+    assert "yolo" in message, "the message has to list what is available"

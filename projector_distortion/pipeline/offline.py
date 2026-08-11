@@ -1,14 +1,14 @@
 """
 Offline pipeline: restore + detect over image pairs on disk. No hardware needed.
 
-For each (pro, beam) pair:
+For each (distorted, light) pair:
 
-    restored = restorer(pro, beam)
-    detector(pro)        -> "distorted" detections   (before restoration)
+    restored = restorer(distorted, light)
+    detector(distorted)  -> "distorted" detections  (before restoration)
     detector(restored)   -> "restored" detections   (after)
 
-Clean and annotated images are kept separate, so PSNR/SSIM against the clean ground
-truth and re-detection with another backend remain possible after the run.
+Un-annotated and annotated images are kept separate, so PSNR/SSIM against the surface
+ground truth and re-detection with another backend remain possible after the run.
 """
 
 import time
@@ -29,7 +29,7 @@ class FrameResult:
 
     frame_id: int
     name_id: str
-    beam: np.ndarray
+    light: np.ndarray
     distorted: np.ndarray
     distorted_det: np.ndarray
     restored: np.ndarray
@@ -40,15 +40,15 @@ class FrameResult:
     det_restored: List = field(default_factory=list)
     t_restore: float = 0.0
     t_detect: float = 0.0
-    clean: Optional[np.ndarray] = None
+    surface: Optional[np.ndarray] = None
     gt_boxes: List = field(default_factory=list)
 
     def metrics(self) -> Dict[str, Optional[float]]:
-        """PSNR/SSIM of distorted vs clean and restored vs clean; None without GT."""
-        if self.clean is None:
+        """PSNR/SSIM of distorted vs surface and restored vs surface; None without GT."""
+        if self.surface is None:
             return {"psnr_distorted": None, "psnr_restored": None,
                     "ssim_distorted": None, "ssim_restored": None}
-        ref = resize(self.clean, (self.restored.shape[1], self.restored.shape[0]))
+        ref = resize(self.surface, (self.restored.shape[1], self.restored.shape[0]))
         return {
             "psnr_distorted": psnr(ref, self.distorted),
             "psnr_restored": psnr(ref, self.restored),
@@ -58,55 +58,54 @@ class FrameResult:
 
 
 def process_sample(sample: Sample, restorer, detector, frame_id=0,
-                   best_per_class=False, min_area=500, min_width=20, min_height=20,
+                   min_area=500, min_width=20, min_height=20,
                    with_gt=True) -> FrameResult:
-    """Run one (pro, beam) pair end to end."""
-    pro = read_bgr(sample.pro)
-    beam = read_bgr(sample.beam)
+    """Run one (distorted, light) pair end to end."""
+    distorted = read_bgr(sample.distorted)
+    light = read_bgr(sample.light)
     size = tuple(restorer.input_size)
 
     t0 = time.perf_counter()
-    restored_clean, residual, residual_mean = restorer.restore_full(pro, beam)
+    restored_plain, residual, residual_mean = restorer.restore_full(distorted, light)
     t_restore = time.perf_counter() - t0
 
-    distorted_clean = resize(pro, size)
+    distorted_plain = resize(distorted, size)
 
     t1 = time.perf_counter()
-    raw_distorted = detector(distorted_clean)
-    raw_restored = detector(restored_clean)
+    raw_distorted = detector(distorted_plain)
+    raw_restored = detector(restored_plain)
     t_detect = time.perf_counter() - t1
 
-    gate = dict(min_area=min_area, min_width=min_width, min_height=min_height,
-                best_per_class=best_per_class)
+    gate = dict(min_area=min_area, min_width=min_width, min_height=min_height)
     det_c = filter_detections(raw_distorted, **gate)
     det_r = filter_detections(raw_restored, **gate)
 
-    distorted_det = draw_detections(distorted_clean.copy(), det_c)
-    restored_det = draw_detections(restored_clean.copy(), det_r)
+    distorted_det = draw_detections(distorted_plain.copy(), det_c)
+    restored_det = draw_detections(restored_plain.copy(), det_r)
 
-    clean_img, gt_boxes = None, []
-    if with_gt and sample.clean:
-        clean_img = resize(read_bgr(sample.clean), size)
+    surface_img, gt_boxes = None, []
+    if with_gt and sample.surface:
+        surface_img = resize(read_bgr(sample.surface), size)
         gt_boxes = load_yolo_labels(sample.label, size[0], size[1])
 
     return FrameResult(
         frame_id=frame_id, name_id=sample.name_id,
-        beam=resize(beam, size),
-        distorted=distorted_clean, distorted_det=distorted_det,
-        restored=restored_clean, restored_det=restored_det,
+        light=resize(light, size),
+        distorted=distorted_plain, distorted_det=distorted_det,
+        restored=restored_plain, restored_det=restored_det,
         residual=residual, residual_mean=residual_mean,
         det_distorted=det_c, det_restored=det_r,
         t_restore=t_restore, t_detect=t_detect,
-        clean=clean_img, gt_boxes=gt_boxes,
+        surface=surface_img, gt_boxes=gt_boxes,
     )
 
 
 def build_panel(result: FrameResult, detector_name="detector") -> np.ndarray:
-    """2x2: beam | distorted+det / restored+det | residual."""
+    """2x2: light | distorted+det / restored+det | residual."""
     return grid_2x2(
-        result.beam, result.distorted_det, result.restored_det, result.residual,
+        result.light, result.distorted_det, result.restored_det, result.residual,
         labels=[
-            "beam (projected source)",
+            "light (projected source)",
             f"distorted + {detector_name} ({len(result.det_distorted)})",
             f"restored + {detector_name} ({len(result.det_restored)})",
             "residual",
@@ -115,16 +114,16 @@ def build_panel(result: FrameResult, detector_name="detector") -> np.ndarray:
 
 
 def run_offline(input_root, restorer, detector, recorder, limit=0,
-                best_per_class=False, min_area=500, min_width=20, min_height=20,
+                min_area=500, min_width=20, min_height=20,
                 detector_name="detector", progress=True) -> Dict:
     """
     Restore and detect over every discovered pair, writing through `recorder`.
 
-    Restoration quality is deliberately not scored here - that needs clean ground
+    Restoration quality is deliberately not scored here - that needs surface ground
     truth and is evaluate.py's job.
     """
     samples = find_samples(input_root, limit=limit)
-    print(f"found {len(samples)} pro/beam pair(s)")
+    print(f"found {len(samples)} distorted/light pair(s)")
 
     totals = {"distorted": 0, "restored": 0}
     sums = {"residual": 0.0, "t_restore": 0.0, "t_detect": 0.0}
@@ -140,9 +139,8 @@ def run_offline(input_root, restorer, detector, recorder, limit=0,
 
     for i, sample in iterator:
         result = process_sample(sample, restorer, detector, frame_id=i,
-                                best_per_class=best_per_class, min_area=min_area,
-                                min_width=min_width, min_height=min_height,
-                                with_gt=False)
+                                min_area=min_area, min_width=min_width,
+                                min_height=min_height, with_gt=False)
         panel = build_panel(result, detector_name)
 
         if recorder.should_save(i):

@@ -12,8 +12,9 @@ Loss: L1 + VGG perceptual + (1 - SSIM) + high-frequency Haar, weights from
 configs/restoration.yaml (tuned by an Optuna sweep on this dataset).
 
 The network predicts the residual, so the supervised quantity is
-`(pro - residual).clamp(-1, 1)` against the clean image. Checkpoints embed their
-RestorationConfig, so demo.py reconstructs the right architecture with no extra flags.
+`(distorted - residual).clamp(-1, 1)` against the surface image. Checkpoints embed
+their RestorationConfig, so demo.py reconstructs the right architecture with no extra
+flags.
 
 Needs the training extra:  pip install -e .[train]
 """
@@ -39,7 +40,7 @@ from projector_distortion.data import (  # noqa: E402
     RESEARCH_DIRS, TripletPatchDataset, index_triplets,
 )
 from projector_distortion.models.restoration import (  # noqa: E402
-    add_ablation_args, build_network, config_from_args, count_parameters,
+    ARCH_NAME, add_ablation_args, build_network, config_from_args, count_parameters,
     load_checkpoint, save_checkpoint,
 )
 
@@ -97,6 +98,18 @@ class PerceptualLoss(nn.Module):
             return torch.mean(torch.abs(self.slice(x) - self.slice(y.detach())))
 
 
+DEFAULT_DATA_ROOT = "data/sample_input"
+
+# train.data keys, and the pre-rename spelling each one replaced.
+DATA_KEYS = {"distorted": "pro", "light": "beam", "surface": "clean"}
+
+
+def _configured_data(data):
+    """The three train.data directories, still accepting the pre-rename key names."""
+    return {new: (data or {}).get(new, (data or {}).get(old))
+            for new, old in DATA_KEYS.items()}
+
+
 def _ssim_module(device):
     try:
         import pytorch_msssim
@@ -108,17 +121,13 @@ def _ssim_module(device):
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data-root", default="data/sample_input",
-                   help="folder with pro/ beam/ clean/ (or the research layout)")
+    p.add_argument("--data-root", default=None,
+                   help=f"folder with distorted/ light/ surface/, or the research "
+                        f"layout (default: the three directories under train.data in "
+                        f"configs/restoration.yaml, else {DEFAULT_DATA_ROOT}). Passing "
+                        f"this overrides train.data")
     p.add_argument("--gt", default=None,
-                   help="where clean/ lives when it is not under --data-root")
-    p.add_argument("--pro-dir", default=None,
-                   help="distorted captures; a directory, a glob, or several. Given "
-                        "with --beam-dir/--clean-dir this replaces --data-root, which "
-                        "is how a date-partitioned set is read (default: train.data "
-                        "in configs/restoration.yaml)")
-    p.add_argument("--beam-dir", default=None, help="projector frames")
-    p.add_argument("--clean-dir", default=None, help="un-projected targets")
+                   help="where surface/ lives when it is not under --data-root")
     p.add_argument("--out", default="runs", help="parent folder for run directories")
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
@@ -130,8 +139,9 @@ def build_parser():
     p.add_argument("--resume", default=None, help="checkpoint to continue from")
     p.add_argument("--no-amp", action="store_true")
     p.add_argument("--save-every", type=int, default=1, help="epochs between saves")
-    add_common_args(p)
-    add_ablation_args(p, capacity=True)
+    # No detection flags: training only ever fits the restoration network.
+    add_common_args(p, detector=False)
+    add_ablation_args(p)
     return p
 
 
@@ -145,21 +155,24 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def _clean_root(data_root, gt_root):
+def _surface_root(data_root, gt_root):
     """
-    Directory holding the clean targets.
+    Directory holding the surface targets.
 
     They sit either under data_root (research and flat layouts) or under
-    gt_root/clean (the bundled sample set).
+    gt_root/surface (the bundled sample set). The pre-rename `clean/` name is still
+    accepted so an already-collected session keeps training.
     """
-    candidates = [os.path.join(data_root, RESEARCH_DIRS["clean"]),
+    candidates = [os.path.join(data_root, RESEARCH_DIRS["surface"]),
+                  os.path.join(data_root, "surface"),
+                  os.path.join(gt_root or "", "surface"),
                   os.path.join(data_root, "clean"),
                   os.path.join(gt_root or "", "clean")]
     for path in candidates:
         if os.path.isdir(path):
             return path
     raise SystemExit(
-        "no clean/ targets found. training needs the un-projected screen images.\n"
+        "no surface/ targets found. training needs the un-projected screen images.\n"
         + "".join(f"    looked in {p}\n" for p in candidates))
 
 
@@ -204,28 +217,26 @@ def main(argv=None):
     os.makedirs(run, exist_ok=True)
 
     print("=" * 74)
-    print(f"train restormer_like [{tag}] | {epochs} epochs | device={device}")
+    print(f"train {ARCH_NAME} [{tag}] | {epochs} epochs | device={device}")
     print(f"    {cfg.describe()}")
     print(f"    batch {batch_size} x accum {accum} | lr {lr} | workers {workers}")
     print(f"    loss weights {weights}")
     print(f"    run dir {run}")
     print("=" * 74)
 
-    # Three explicit directories win over a single root: the captured sets are
-    # date-partitioned and their beam frames live somewhere else entirely.
-    configured = tcfg.get("data") or {}
-    pro_dir = args.pro_dir or configured.get("pro")
-    beam_dir = args.beam_dir or configured.get("beam")
-    clean_dir = args.clean_dir or configured.get("clean")
-
-    if pro_dir or beam_dir or clean_dir:
-        data_root = {"pro": pro_dir, "beam": beam_dir, "clean": clean_dir}
-        triplets = index_triplets(pro=pro_dir, beam=beam_dir, clean=clean_dir,
-                                  sample=args.sample, seed=args.seed)
+    # train.data names the three directories separately, because captured sets are
+    # date-partitioned and their light frames live somewhere else entirely. An
+    # explicit --data-root replaces that: the config ships with all three filled in,
+    # so without this the flag could never take effect.
+    configured = _configured_data(tcfg.get("data"))
+    if not args.data_root and any(configured.values()):
+        data_root = configured
+        triplets = index_triplets(sample=args.sample, seed=args.seed, **configured)
     else:
-        data_root = resolve_path(args.data_root) or args.data_root
-        clean_root = _clean_root(data_root, resolve_path(args.gt))
-        triplets = index_triplets(data_root, clean_root=clean_root,
+        root = args.data_root or DEFAULT_DATA_ROOT
+        data_root = resolve_path(root) or root
+        surface_root = _surface_root(data_root, resolve_path(args.gt))
+        triplets = index_triplets(data_root, surface_root=surface_root,
                                   sample=args.sample, seed=args.seed)
     patch = tuple(pick(None, tcfg, "patch_size", default=[180, 320]))
     big = tuple(pick(None, tcfg, "resize_to", default=[360, 640]))
@@ -262,21 +273,21 @@ def main(argv=None):
         except ImportError:
             pass
 
-        for pro, beam, clean in loop:
-            pro = pro.to(device, non_blocking=True)
-            beam = beam.to(device, non_blocking=True)
-            clean = clean.to(device, non_blocking=True)
+        for distorted, light, surface in loop:
+            distorted = distorted.to(device, non_blocking=True)
+            light = light.to(device, non_blocking=True)
+            surface = surface.to(device, non_blocking=True)
 
             ctx = (torch.amp.autocast(device_type="cuda") if use_amp
                    else torch.enable_grad())
             with ctx:
-                residual = net(torch.cat([pro, beam], dim=1))
-                restored = (pro - residual).clamp(-1, 1)
+                residual = net(torch.cat([distorted, light], dim=1))
+                restored = (distorted - residual).clamp(-1, 1)
                 parts = {
-                    "l1": l1(restored, clean),
-                    "perceptual": percep(restored, clean),
-                    "ssim": 1 - ssim_fn(restored, clean),
-                    "wavelet": wavelet(restored, clean),
+                    "l1": l1(restored, surface),
+                    "perceptual": percep(restored, surface),
+                    "ssim": 1 - ssim_fn(restored, surface),
+                    "wavelet": wavelet(restored, surface),
                 }
                 total = sum(weights.get(k, 0.0) * v for k, v in parts.items())
 

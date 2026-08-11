@@ -26,7 +26,7 @@ demo.py / evaluate.py / train.py
    │     ├─ models.build_restorer
    │     └─ models.build_detector
    │
-   ├─ data.find_samples          pro ↔ beam ↔ clean ↔ label, by filename
+   ├─ data.find_samples          distorted ↔ light ↔ surface ↔ label, by filename
    │  data.index_triplets        training only: complete triplets
    │
    ├─ pipeline.run_offline       ─┐
@@ -43,8 +43,8 @@ demo.py / evaluate.py / train.py
 `evaluate.py` skips `run_offline` and drives `process_sample` itself, because it scores
 per sample instead of recording frames.
 
-`pipeline/__init__.py` exposes `run_live` as a lazy proxy. Importing `live` pulls in
-ctypes and Win32 plumbing an offline run never needs.
+`pipeline/__init__.py` exposes `run_live` as a lazy proxy, so an offline run never loads
+the webcam and Win32 window plumbing (`utils/display.py`) it has no use for.
 
 ---
 
@@ -63,20 +63,22 @@ ctypes and Win32 plumbing an offline run never needs.
 
 | File | Holds |
 |---|---|
-| [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (weights, input_size, fp16) · `ablation` (structure + capacity) · `train` (data paths, hyperparameters, loss weights) |
-| [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, box gate) · `weights` per backend · `names` (17 classes) · `evaluate.iou_threshold` |
+| [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (backend, weights, input_size) · `ablation` (structure + capacity) · `train` (data paths, hyperparameters, loss weights) |
+| [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, box gate) · `weights` per backend · `names` (17 classes) |
 
 ### `models/`
 
 | File | Owns |
 |---|---|
-| [`models/base.py`](models/base.py) | `BaseRestorer`, `BaseDetector`, `Detection`, `NullDetector`, and the `@register_detector` registry |
-| [`models/restoration.py`](models/restoration.py) | `RestorationConfig` + the 10 `TOGGLES`, the network (`LayerNorm2d` → `SimpleGate` → `CALayer` → `NAFBlock` → `RestormerLikeBlock` → `RestorationNet`), checkpoint save/load, `RestormerLikeRestorer` |
+| [`models/base.py`](models/base.py) | `BaseRestorer`, `BaseDetector`, `Detection`, `NullDetector`, and the `@register_restorer` / `@register_detector` registries |
+| [`models/restoration.py`](models/restoration.py) | `RestorationConfig` + the 10 `TOGGLES`, the network (`LayerNorm2d` → `SimpleGate` → `CALayer` → `NAFBlock` → `NAFSEBlock` → `RestorationNet`), checkpoint save/load, `NAFSEUNetRestorer` |
 | [`models/detection.py`](models/detection.py) | `YoloDetector` (ultralytics), `SsdDetector` (torchvision), `build_detector`, `filter_detections`, the default `CLASS_NAMES` |
 
-The network is a 3-level U-Net. Despite the name there is no MDTA attention, so it is
-NAFNet plus squeeze-excite rather than Restormer. It is fully convolutional, which is why
-the 180×320 training patch and the 640×360 inference size behave identically.
+The network is a 3-level U-Net of NAFNet blocks with squeeze-excite channel attention —
+`naf_se_unet`, which is what the name says. There is no MDTA attention and no
+depthwise-gated FFN, so it is not Restormer, whatever the pre-rename `restormer_like`
+tag on older checkpoints suggests. It is fully convolutional, which is why the 180×320
+training patch and the 640×360 inference size behave identically.
 
 `ssd` normalises its labels: torchvision heads emit the COCO id (1..N, 0 = background), so
 `detect()` subtracts 1. ultralytics is already 0-based.
@@ -86,7 +88,7 @@ the 180×320 training patch and the 640×360 inference size behave identically.
 | File | Owns |
 |---|---|
 | [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_sample` (one pair end to end), `build_panel`, `run_offline`. No hardware |
-| [`pipeline/live.py`](pipeline/live.py) | Monitor enumeration and borderless placement via Win32, black/white-flash calibration, homography + warp, the restore/detect worker thread, the writer thread, stride auto-tuning |
+| [`pipeline/live.py`](pipeline/live.py) | Webcam opening, black/white-flash calibration, homography + warp, the restore/detect worker thread, the writer thread, stride auto-tuning |
 
 `live.py` runs three threads: the main loop projects and captures, a worker restores and
 detects, a writer encodes. Queue depths are `MAX_IN_FLIGHT = 3` and
@@ -101,8 +103,16 @@ Window titles: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_Firs
 | File | Owns |
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
-| [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `draw_ground_truth`, `caption`, `side_by_side`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `parse_kinds`, `estimate_footprint_mb` |
+| [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`, `parse_kinds` |
+| [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 monitor enumeration and borderless placement |
+
+`display.py` is separate because getting a window onto the projector is not a pipeline
+concern, and `collect.py` and `record.py` need it too. On Windows,
+`cv2.setWindowProperty(WND_PROP_FULLSCREEN)` snaps the window back to the primary display
+and silently undoes `cv2.moveWindow()`, which is why a naive `--screen` has no effect;
+geometry goes through the Win32 API instead. `live.place_window` is a one-line wrapper
+that supplies the projector window's title.
 
 `ssim` is implemented here (gaussian-windowed, 11×11, sigma 1.5) so metrics never drag in
 scikit-image or pytorch-msssim. `residual_to_bgr` colourmaps mean |residual| as a JET
@@ -123,8 +133,8 @@ Four small types carry everything between modules.
 # models/base.py
 class BaseRestorer:
     input_size: tuple[int, int] = (640, 360)
-    def restore(self, pro_bgr, beam_bgr) -> tuple[restored_bgr, residual_bgr]: ...
-    def restore_full(self, pro_bgr, beam_bgr) -> tuple[restored, residual, mean_abs]: ...
+    def restore(self, distorted_bgr, light_bgr) -> tuple[restored_bgr, residual_bgr]: ...
+    def restore_full(self, distorted_bgr, light_bgr) -> tuple[restored, residual, mean_abs]: ...
 
 class BaseDetector:
     def detect(self, bgr) -> list[Detection]: ...
@@ -138,8 +148,8 @@ class Detection:
 # data.py
 @dataclass(frozen=True)
 class Sample:
-    name_id: str; pro: str; beam: str
-    clean: str | None = None      # optional: needed to score
+    name_id: str; distorted: str; light: str
+    surface: str | None = None      # optional: needed to score
     label: str | None = None
 ```
 
@@ -148,10 +158,10 @@ class Sample:
 @dataclass
 class FrameResult:
     frame_id, name_id
-    beam, distorted, distorted_det, restored, restored_det, residual   # BGR arrays
+    light, distorted, distorted_det, restored, restored_det, residual   # BGR arrays
     residual_mean, det_distorted, det_restored, t_restore, t_detect
-    clean, gt_boxes                                                    # None / [] without GT
-    def metrics(self) -> dict   # psnr/ssim, distorted and restored, None without clean
+    surface, gt_boxes                                                    # None / [] without GT
+    def metrics(self) -> dict   # psnr/ssim, distorted and restored, None without surface
 ```
 
 `restore_full` exists so a caller gets mean |residual| from one forward pass instead of
@@ -170,9 +180,9 @@ from projector_distortion import build_restorer, build_detector
 from projector_distortion.data import find_samples
 from projector_distortion.pipeline import process_sample
 
-restorer = build_restorer("weights/restorer_restormerlike.pt")
+restorer = build_restorer("weights/restorer_nafse_unet.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-root = "data/sample_input"               # pro/ beam/ + clean/ labels/ for scoring
+root = "data/sample_input"               # distorted/ light/ + surface/ labels/ for scoring
 for i, s in enumerate(find_samples(root, root)):
     r = process_sample(s, restorer, detector, frame_id=i)
     print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
@@ -189,15 +199,15 @@ checkpoint helpers, `utils` exposes every helper listed above.
 
 ## Tests
 
-102 tests, no hardware needed.
+107 tests, no hardware needed.
 
 | File | Covers |
 |---|---|
 | [`../tests/conftest.py`](../tests/conftest.py) | Fixtures `root` / `bgr_image` / `pro_beam`, and the skips for a missing checkpoint or optional module |
-| [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | Filename ids, sample discovery, PSNR/SSIM/IoU, `RunRecorder` behaviour, triplet indexing, `average_precision`, the argparse defaults, `device_note`, the `requirements-cuda.txt` pins |
-| [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig` and its tags, every toggle building and training one step, forward shapes, checkpoint round trip, the shipped weights |
-| [`../tests/test_detection.py`](../tests/test_detection.py) | Registry, label normalisation, the box size gate, `best_per_class`, both backends against the real checkpoints |
-| [`../tests/test_collect.py`](../tests/test_collect.py) | `collect.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the `warp` and `beam` stage outputs |
+| [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | Filename ids, sample discovery, PSNR/SSIM/IoU, `RunRecorder` behaviour, triplet indexing, `average_precision`, the argparse defaults, unknown-backend handling, the `live._worker` queue contract driven with stubs, `device_note`, the `requirements-cuda.txt` pins |
+| [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig` and its tags, every toggle building and training one step, forward shapes, checkpoint round trip, the shipped weights, the restorer registry with a third-party backend |
+| [`../tests/test_detection.py`](../tests/test_detection.py) | Registry, label normalisation, the box size gate, both backends against the real checkpoints |
+| [`../tests/test_collect.py`](../tests/test_collect.py) | `collect.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the `warp` and `light` stage outputs |
 
 ```bash
 python -m pytest -q

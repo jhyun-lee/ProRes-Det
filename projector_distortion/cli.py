@@ -18,20 +18,31 @@ DEFAULT_LIVE_BG = "data/live/BaseBackGround.jpg"
 DEFAULT_OUTPUT = "output"
 
 
-def add_common_args(p):
-    """Flags every entry point understands."""
+DETECTOR_HELP = ("detection backend: yolo | ssd | none, or anything else registered "
+                 "with @register_detector (default: from configs/detection.yaml)")
+RESTORER_HELP = ("restoration backend: anything registered with @register_restorer "
+                 "(default: from configs/restoration.yaml)")
+
+
+def add_common_args(p, detector_help=DETECTOR_HELP, detector=True):
+    """
+    Flags every entry point understands.
+
+    `detector=False` leaves the detection flags out. train.py only ever fits the
+    restoration network, so --detector / --det-weights / --conf were accepted there
+    and then silently ignored.
+    """
     g = p.add_argument_group("models")
+    g.add_argument("--restorer", default=None, help=RESTORER_HELP)
     g.add_argument("--restorer-weights", default=None,
                    help="restoration checkpoint (default: from configs/restoration.yaml)")
-    g.add_argument("--detector", default=None, choices=["yolo", "ssd", "none"],
-                   help="detection backend (default: from configs/detection.yaml)")
-    g.add_argument("--det-weights", default=None,
-                   help="detector checkpoint (default: per-backend from the config)")
-    g.add_argument("--conf", type=float, default=None, help="detector confidence floor")
-    g.add_argument("--classes", default=None,
-                   help="dataset.yaml to take class names from")
+    if detector:
+        g.add_argument("--detector", default=None, help=detector_help)
+        g.add_argument("--det-weights", default=None,
+                       help="detector checkpoint (default: per-backend from the config)")
+        g.add_argument("--conf", type=float, default=None,
+                       help="detector confidence floor")
     g.add_argument("--device", default=None, help="cuda | cpu (default: cuda if present)")
-    g.add_argument("--fp16", action="store_true", help="autocast the restorer on CUDA")
     g.add_argument("--input-size", type=int, nargs=2, default=None, metavar=("W", "H"),
                    help="what the restorer runs at (default: from the config). The "
                         "network is fully convolutional, so this is free to change - "
@@ -91,17 +102,32 @@ def build_models(args, need_detector=True):
 
     Config precedence lives here so the three entry points stay identical on it.
     """
-    from .data import load_class_names
-    from .models import build_detector, build_restorer
-    from .models.restoration import RestorationConfig, config_from_args
+    from .models import (
+        build_detector, build_restorer, detector_names, restorer_names,
+    )
+    from .models.restoration import RestorationConfig
 
-    rest_cfg = load_config("restoration", args.restoration_config)
-    det_cfg = load_config("detection", args.detection_config)
+    # A bad --*-config path or a missing PyYAML is the user's problem to fix, not a
+    # traceback to read.
+    try:
+        rest_cfg = load_config("restoration", args.restoration_config)
+        det_cfg = load_config("detection", args.detection_config)
+    except (FileNotFoundError, ImportError) as e:
+        raise SystemExit(str(e)) from e
+
     device = resolve_device(args.device)
     print(device_note(device))
 
     input_size = tuple(pick(getattr(args, "input_size", None), rest_cfg,
                             "model", "input_size", default=[640, 360]))
+
+    backend = pick(getattr(args, "restorer", None), rest_cfg, "model", "backend",
+                   default="naf_se_unet")
+    if backend not in restorer_names():
+        raise SystemExit(
+            f"unknown restorer '{backend}'.\n"
+            f"    available: {', '.join(restorer_names())}"
+        )
 
     weights = resolve_path(pick(args.restorer_weights, rest_cfg, "model", "weights"))
     if not weights or not os.path.exists(weights):
@@ -111,30 +137,45 @@ def build_models(args, need_detector=True):
             f"{os.path.join(PROJECT_ROOT, 'weights')} (see weights/README_weights.md)"
         )
 
-    # Ablation flags only exist on the parsers that registered them (demo/train).
+    # A checkpoint embeds the config it was trained with, so an explicit config is
+    # only needed for a legacy bare state_dict. A default-valued block stays None,
+    # which is what keeps the checkpoint's own config winning.
     ablation = None
-    if any(hasattr(args, a) for a in ("no_ca", "base_dim")):
-        from_cli = config_from_args(args)
-        ablation = from_cli if from_cli != RestorationConfig() else None
-    if ablation is None and rest_cfg.get("ablation"):
+    if rest_cfg.get("ablation"):
         from_yaml = RestorationConfig.from_dict(rest_cfg["ablation"])
-        ablation = from_yaml if from_yaml != RestorationConfig() else None
+        ablation = None if from_yaml.is_default() else from_yaml
 
-    fp16 = bool(args.fp16 or rest_cfg.get("model", {}).get("fp16"))
-    restorer = build_restorer(weights, device=device, cfg=ablation,
-                              input_size=input_size, fp16=fp16)
+    try:
+        restorer = build_restorer(backend, weights, device=device, cfg=ablation,
+                                  input_size=input_size)
+    except RuntimeError as e:
+        raise SystemExit(f"could not load the restoration checkpoint.\n{e}") from e
     print(f"restorer: {restorer.describe()}")
-    print(f"    {restorer.cfg.describe()}")
+    # The ablation config belongs to the shipped architecture, not to BaseRestorer.
+    # Printing it unconditionally crashed any other registered backend.
+    arch_cfg = getattr(restorer, "cfg", None)
+    if arch_cfg is not None:
+        print(f"    {arch_cfg.describe()}")
 
     detector = None
     if need_detector:
-        backend = pick(args.detector, det_cfg, "detector", "backend", default="yolo")
-        conf = float(pick(args.conf, det_cfg, "detector", "conf", default=0.25))
-        names = load_class_names(args.classes) if args.classes else det_cfg.get("names")
+        backend = pick(getattr(args, "detector", None), det_cfg, "detector", "backend",
+                       default="yolo")
+        # Before the weights lookup: an unrecognised backend has no weights entry, so
+        # checking that first would blame the checkpoint for a misspelled name.
+        if backend not in detector_names():
+            raise SystemExit(
+                f"unknown detector '{backend}'.\n"
+                f"    available: {', '.join(detector_names())}"
+            )
+        conf = float(pick(getattr(args, "conf", None), det_cfg, "detector", "conf",
+                          default=0.25))
+        names = det_cfg.get("names")
         det_weights = None
         if backend != "none":
             det_weights = resolve_path(
-                args.det_weights or (det_cfg.get("weights") or {}).get(backend))
+                getattr(args, "det_weights", None)
+                or (det_cfg.get("weights") or {}).get(backend))
             if not det_weights or not os.path.exists(det_weights):
                 raise SystemExit(
                     f"detector weights for '{backend}' not found: {det_weights}\n"
@@ -152,14 +193,11 @@ def build_models(args, need_detector=True):
 
 
 def box_filter_kwargs(args, det_cfg):
-    """The box size gate + best_per_class, CLI over YAML."""
-    best = getattr(args, "best_per_class", False) or pick(
-        None, det_cfg, "detector", "best_per_class", default=False)
+    """The box size gate, from configs/detection.yaml."""
     return {
         "min_width": int(pick(None, det_cfg, "detector", "min_width", default=20)),
         "min_height": int(pick(None, det_cfg, "detector", "min_height", default=20)),
         "min_area": int(pick(None, det_cfg, "detector", "min_area", default=500)),
-        "best_per_class": bool(best),
     }
 
 

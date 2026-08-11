@@ -3,13 +3,18 @@ Sample discovery, ground truth loading, and the training dataset.
 
 Filenames tie the views of one moment together (see data/README_data.md):
 
-    pro    projected_<oriId>_<beamId>.jpg
-    beam   output_video_<beamId>.jpg
-    clean  Ori<oriId>.jpg
-    label  Ori<oriId>.txt
+    distorted  distorted_<surfaceId>_<lightId>.jpg
+    light      light_<lightId>.jpg
+    surface    surface_<surfaceId>.jpg
+    label      surface_<surfaceId>.txt
 
-`oriId` must not contain '_'; `beamId` may. Layouts 'flat' (pro/ beam/) and
-'research' (ProjectorImage/ BeamImage/ OriginalImage/) are auto-detected.
+`surfaceId` must not contain '_'; `lightId` may. Layouts 'flat' (distorted/ light/
+surface/) and 'research' (ProjectorImage/ BeamImage/ OriginalImage/) are
+auto-detected.
+
+Sessions collected before the rename used pro/ beam/ clean/ and the prefixes
+`projected_` / `output_video_` / `Ori`. Those are still recognised on read so an
+existing dataset keeps working; nothing writes them any more.
 """
 
 import glob
@@ -23,9 +28,31 @@ import numpy as np
 
 from .utils.image import IMAGE_EXT, read_bgr, resize
 
-FLAT_DIRS = {"pro": "pro", "beam": "beam", "clean": "clean"}
-RESEARCH_DIRS = {"pro": "ProjectorImage", "beam": "BeamImage",
-                 "clean": "OriginalImage"}
+DISTORTED_PREFIX = "distorted_"
+LIGHT_PREFIX = "light_"
+SURFACE_PREFIX = "surface_"
+
+LEGACY_DISTORTED_PREFIX = "projected_"
+LEGACY_LIGHT_PREFIX = "output_video_"
+LEGACY_SURFACE_PREFIX = "Ori"
+
+# Every prefix a filename of that role may carry, newest first.
+DISTORTED_PREFIXES = (DISTORTED_PREFIX, LEGACY_DISTORTED_PREFIX)
+LIGHT_PREFIXES = (LIGHT_PREFIX, LEGACY_LIGHT_PREFIX)
+SURFACE_PREFIXES = (SURFACE_PREFIX, LEGACY_SURFACE_PREFIX)
+
+FLAT_DIRS = {"distorted": "distorted", "light": "light", "surface": "surface"}
+LEGACY_FLAT_DIRS = {"distorted": "pro", "light": "beam", "surface": "clean"}
+RESEARCH_DIRS = {"distorted": "ProjectorImage", "light": "BeamImage",
+                 "surface": "OriginalImage"}
+
+# Tried in order by resolve_dirs; the first whose `distorted` folder exists wins.
+LAYOUTS = (("flat", FLAT_DIRS), ("legacy-flat", LEGACY_FLAT_DIRS),
+           ("research", RESEARCH_DIRS))
+
+# Where a ground-truth root may keep the surface images, newest first.
+SURFACE_GT_DIRS = (FLAT_DIRS["surface"], RESEARCH_DIRS["surface"],
+                   LEGACY_FLAT_DIRS["surface"])
 
 
 def _images_in(directory) -> Dict[str, str]:
@@ -35,101 +62,116 @@ def _images_in(directory) -> Dict[str, str]:
             if f.lower().endswith(IMAGE_EXT)}
 
 
-def ori_id(name: str) -> str:
-    """oriId from a pro filename, or from a clean/label filename."""
-    stem = os.path.splitext(os.path.basename(name))[0]
-    if stem.startswith("projected_"):
-        return stem[len("projected_"):].split("_")[0]
-    return stem.replace("Ori", "")
+def _strip(stem: str, prefixes) -> Optional[str]:
+    """The part after whichever of `prefixes` the stem starts with, else None."""
+    for prefix in prefixes:
+        if stem.startswith(prefix):
+            return stem[len(prefix):]
+    return None
 
 
-def beam_id(name: str) -> str:
-    """beamId from a pro filename, or from a beam filename."""
+def surface_id(name: str) -> str:
+    """surfaceId from a distorted filename, or from a surface/label filename."""
     stem = os.path.splitext(os.path.basename(name))[0]
-    if stem.startswith("projected_"):
-        return "_".join(stem[len("projected_"):].split("_")[1:])
-    return stem.replace("output_video_", "")
+    rest = _strip(stem, DISTORTED_PREFIXES)
+    if rest is not None:
+        return rest.split("_")[0]
+    rest = _strip(stem, SURFACE_PREFIXES)
+    return stem if rest is None else rest
+
+
+def light_id(name: str) -> str:
+    """lightId from a distorted filename, or from a light filename."""
+    stem = os.path.splitext(os.path.basename(name))[0]
+    rest = _strip(stem, DISTORTED_PREFIXES)
+    if rest is not None:
+        return "_".join(rest.split("_")[1:])
+    rest = _strip(stem, LIGHT_PREFIXES)
+    return stem if rest is None else rest
 
 
 def resolve_dirs(root) -> Tuple[str, Dict[str, str]]:
     """Return (layout_name, {role: absolute dir}) for whichever layout `root` uses."""
     root = str(root)
-    for layout, mapping in (("flat", FLAT_DIRS), ("research", RESEARCH_DIRS)):
-        if os.path.isdir(os.path.join(root, mapping["pro"])):
+    for layout, mapping in LAYOUTS:
+        if os.path.isdir(os.path.join(root, mapping["distorted"])):
             return layout, {k: os.path.join(root, v) for k, v in mapping.items()}
     if _images_in(root):
-        return "mixed", {"pro": root, "beam": root, "clean": root}
+        return "mixed", {"distorted": root, "light": root, "surface": root}
     raise FileNotFoundError(
         f"no recognised data layout under {root}\n"
-        f"    expected '{FLAT_DIRS['pro']}/' or '{RESEARCH_DIRS['pro']}/', "
-        f"or images directly in the folder"
+        f"    expected '{FLAT_DIRS['distorted']}/' or "
+        f"'{RESEARCH_DIRS['distorted']}/', or images directly in the folder"
     )
 
 
 @dataclass(frozen=True)
 class Sample:
-    """One inference unit. `clean` and `label` are optional (needed only to score)."""
+    """One inference unit. `surface` and `label` are optional (needed only to score)."""
 
     name_id: str
-    pro: str
-    beam: str
-    clean: Optional[str] = None
+    distorted: str
+    light: str
+    surface: Optional[str] = None
     label: Optional[str] = None
 
     @property
-    def ori_id(self) -> str:
-        return ori_id(self.pro)
+    def surface_id(self) -> str:
+        return surface_id(self.distorted)
 
 
 def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
     """
-    Pair every `pro` image with its `beam`, attaching clean/label when available.
+    Pair every `distorted` image with its `light`, attaching surface/label when
+    available.
 
-    Unmatched `pro` files are skipped with a warning rather than failing the run.
+    Unmatched `distorted` files are skipped with a warning rather than failing the run.
     """
     layout, dirs = resolve_dirs(input_root)
-    pro_files = _images_in(dirs["pro"])
-    beam_files = _images_in(dirs["beam"])
+    distorted_files = _images_in(dirs["distorted"])
+    light_files = _images_in(dirs["light"])
 
     if layout == "mixed":
-        pro_files = {k: v for k, v in pro_files.items() if k.startswith("projected_")}
-        beam_files = {k: v for k, v in beam_files.items()
-                      if k.startswith("output_video_")}
+        distorted_files = {k: v for k, v in distorted_files.items()
+                           if k.startswith(DISTORTED_PREFIXES)}
+        light_files = {k: v for k, v in light_files.items()
+                       if k.startswith(LIGHT_PREFIXES)}
 
-    beam_by_id = {beam_id(k): v for k, v in beam_files.items()}
+    light_by_id = {light_id(k): v for k, v in light_files.items()}
 
-    clean_by_id, label_by_id = {}, {}
+    surface_by_id, label_by_id = {}, {}
     if gt_root and os.path.isdir(str(gt_root)):
         gt_root = str(gt_root)
-        clean_dir = next((os.path.join(gt_root, d) for d in ("clean", "OriginalImage")
-                          if os.path.isdir(os.path.join(gt_root, d))), gt_root)
-        clean_by_id = {ori_id(k): v for k, v in _images_in(clean_dir).items()}
+        surface_dir = next((os.path.join(gt_root, d) for d in SURFACE_GT_DIRS
+                            if os.path.isdir(os.path.join(gt_root, d))), gt_root)
+        surface_by_id = {surface_id(k): v
+                         for k, v in _images_in(surface_dir).items()}
         labels_dir = os.path.join(gt_root, "labels")
         if os.path.isdir(labels_dir):
-            label_by_id = {ori_id(f): os.path.join(labels_dir, f)
+            label_by_id = {surface_id(f): os.path.join(labels_dir, f)
                            for f in os.listdir(labels_dir) if f.endswith(".txt")}
 
     samples, skipped = [], []
-    for fname, pro_path in pro_files.items():
-        beam_path = beam_by_id.get(beam_id(fname))
-        if beam_path is None:
+    for fname, distorted_path in distorted_files.items():
+        light_path = light_by_id.get(light_id(fname))
+        if light_path is None:
             skipped.append(fname)
             continue
-        oid = ori_id(fname)
+        sid = surface_id(fname)
         samples.append(Sample(
             name_id=os.path.splitext(fname)[0],
-            pro=pro_path, beam=beam_path,
-            clean=clean_by_id.get(oid), label=label_by_id.get(oid),
+            distorted=distorted_path, light=light_path,
+            surface=surface_by_id.get(sid), label=label_by_id.get(sid),
         ))
 
     if skipped:
-        print(f"warning: {len(skipped)} pro image(s) had no matching beam, skipped "
-              f"(e.g. {skipped[0]})")
+        print(f"warning: {len(skipped)} distorted image(s) had no matching light, "
+              f"skipped (e.g. {skipped[0]})")
     if not samples:
         raise RuntimeError(
-            f"no pro/beam pairs found under {input_root} (layout: {layout}).\n"
-            f"    check the naming: projected_<oriId>_<beamId>.jpg and "
-            f"output_video_<beamId>.jpg"
+            f"no distorted/light pairs found under {input_root} (layout: {layout}).\n"
+            f"    check the naming: {DISTORTED_PREFIX}<surfaceId>_<lightId>.jpg and "
+            f"{LIGHT_PREFIX}<lightId>.jpg"
         )
     samples.sort(key=lambda s: s.name_id)
     return samples[:limit] if limit else samples
@@ -139,8 +181,8 @@ def images_under(patterns) -> Dict[str, str]:
     """
     Every image under one or more directories; a glob may stand for several.
 
-    Real captures arrive date-partitioned (`WarpData_0520_pro`, `..._0529_pro`, ...)
-    and the beam frames often sit under a root of their own, so a training set is
+    Real captures arrive date-partitioned (`WarpData_0520_distorted`, `..._0529_...`)
+    and the light frames often sit under a root of their own, so a training set is
     rarely one folder.
     """
     if not patterns:
@@ -157,52 +199,61 @@ def images_under(patterns) -> Dict[str, str]:
     return found
 
 
-def index_triplets(root=None, clean_root=None, sample=0, seed=42,
-                   pro=None, beam=None, clean=None) -> List[List[str]]:
+def _triplet_sources(root, surface_root, distorted, light, surface):
     """
-    [[pro, clean, beam], ...] for training.
+    (distorted, light, surface) name -> path maps, plus a label for the messages.
+
+    The two ways of naming a training set, kept apart from the pairing below: three
+    directories given outright, or one root whose layout is detected.
+    """
+    if distorted or light or surface:
+        return (images_under(distorted), images_under(light), images_under(surface),
+                f"distorted={distorted}")
+    layout, dirs = resolve_dirs(root)
+    return (_images_in(dirs["distorted"]), _images_in(dirs["light"]),
+            _images_in(surface_root or dirs["surface"]),
+            f"{root} (layout: {layout})")
+
+
+def index_triplets(root=None, surface_root=None, sample=0, seed=42,
+                   distorted=None, light=None, surface=None) -> List[List[str]]:
+    """
+    [[distorted, surface, light], ...] for training.
 
     Either pass `root` and let the layout be detected, or name the three directories
-    outright - `pro` / `beam` / `clean` each accept a directory, a glob, or a list.
-    `clean_root` overrides only the clean side of a detected layout.
+    outright - `distorted` / `light` / `surface` each accept a directory, a glob, or
+    a list. `surface_root` overrides only the surface side of a detected layout.
     """
-    if pro or beam or clean:
-        source = f"pro={pro}"
-        pro_files = images_under(pro)
-        beam_files = images_under(beam)
-        clean_files = images_under(clean)
-    else:
-        layout, dirs = resolve_dirs(root)
-        source = f"{root} (layout: {layout})"
-        pro_files = _images_in(dirs["pro"])
-        beam_files = _images_in(dirs["beam"])
-        clean_files = _images_in(clean_root or dirs["clean"])
+    distorted_files, light_files, surface_files, source = _triplet_sources(
+        root, surface_root, distorted, light, surface)
 
-    if not clean_files:
-        raise FileNotFoundError(f"training needs clean targets; none found for {source}")
-    beam_by_id = {beam_id(k): v for k, v in beam_files.items()}
-    clean_by_id = {ori_id(k): v for k, v in clean_files.items()}
+    if not surface_files:
+        raise FileNotFoundError(
+            f"training needs surface targets; none found for {source}")
+    light_by_id = {light_id(k): v for k, v in light_files.items()}
+    surface_by_id = {surface_id(k): v for k, v in surface_files.items()}
 
-    triplets, no_beam, no_clean = [], 0, 0
-    for fname, pro_path in pro_files.items():
-        c = clean_by_id.get(ori_id(fname))
-        b = beam_by_id.get(beam_id(fname))
-        if c and b:
-            triplets.append([pro_path, c, b])
-        elif not b:
-            no_beam += 1
+    triplets, no_light, no_surface = [], 0, 0
+    for fname, distorted_path in distorted_files.items():
+        s = surface_by_id.get(surface_id(fname))
+        li = light_by_id.get(light_id(fname))
+        if s and li:
+            triplets.append([distorted_path, s, li])
+        elif not li:
+            no_light += 1
         else:
-            no_clean += 1
+            no_surface += 1
     if not triplets:
         raise RuntimeError(f"no complete triplets for {source}")
 
     triplets.sort()
     if sample and len(triplets) > sample:
         triplets = random.Random(seed).sample(triplets, sample)
-    print(f"data: {len(triplets):,} triplets of {len(pro_files):,} pro image(s) "
-          f"from {source}")
-    if no_beam or no_clean:
-        print(f"      skipped {no_beam:,} without a beam, {no_clean:,} without a clean")
+    print(f"data: {len(triplets):,} triplets of {len(distorted_files):,} distorted "
+          f"image(s) from {source}")
+    if no_light or no_surface:
+        print(f"      skipped {no_light:,} without a light, {no_surface:,} without "
+              f"a surface")
     return triplets
 
 
@@ -226,30 +277,13 @@ def load_yolo_labels(path, img_w, img_h) -> List[Tuple[int, Tuple[int, int, int,
     return out
 
 
-def load_class_names(path=None) -> Optional[List[str]]:
-    """Read `names:` from a YOLO dataset.yaml or the bundled detection config."""
-    if not path:
-        return None
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"class list not found: {path}")
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    names = data.get("names") or (data.get("detector") or {}).get("class_names")
-    if isinstance(names, dict):
-        names = [names[k] for k in sorted(names)]
-    if not names:
-        raise ValueError(f"no 'names' entry in {path}")
-    return list(names)
-
-
 class TripletPatchDataset:
     """
     Resize each triplet to `big_size`, then take one shared random crop of `small_size`.
 
-    Yields (pro, beam, clean) as CHW float tensors in [-1, 1]. A map-style dataset
-    that torch's DataLoader accepts directly; torch is imported per item so this
-    module stays usable for pure discovery when torch is absent.
+    Yields (distorted, light, surface) as CHW float tensors in [-1, 1]. A map-style
+    dataset that torch's DataLoader accepts directly; torch is imported per item so
+    this module stays usable for pure discovery when torch is absent.
     """
 
     def __init__(self, triplets: Sequence[Sequence[str]],
@@ -266,11 +300,11 @@ class TripletPatchDataset:
 
     def __getitem__(self, idx):
         import torch
-        pro_path, clean_path, beam_path = self.triplets[idx]
+        distorted_path, surface_path, light_path = self.triplets[idx]
         size = (self.big_w, self.big_h)
-        pro = resize(read_bgr(pro_path), size)
-        clean = resize(read_bgr(clean_path), size)
-        beam = resize(read_bgr(beam_path), size)
+        distorted = resize(read_bgr(distorted_path), size)
+        surface = resize(read_bgr(surface_path), size)
+        light = resize(read_bgr(light_path), size)
 
         top = random.randint(0, self.big_h - self.small_h)
         left = random.randint(0, self.big_w - self.small_w)
@@ -281,4 +315,4 @@ class TripletPatchDataset:
             arr = rgb.astype(np.float32) / 127.5 - 1.0
             return torch.from_numpy(np.ascontiguousarray(arr.transpose(2, 0, 1)))
 
-        return to_chw(pro), to_chw(beam), to_chw(clean)
+        return to_chw(distorted), to_chw(light), to_chw(surface)

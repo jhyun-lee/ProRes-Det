@@ -22,19 +22,28 @@ All three scripts understand these. Full list: `python <script>.py --help`.
 
 | Flag | Default | Meaning |
 |---|---|---|
+| `--restorer <name>` | `naf_se_unet` | Restoration backend; any name registered with `@register_restorer` |
 | `--restorer-weights <path>` | from `restoration.yaml` | Restoration checkpoint |
-| `--detector yolo\|ssd\|none` | `yolo` | Detection backend |
-| `--det-weights <path>` | per backend, from `detection.yaml` | Detector checkpoint |
-| `--conf <float>` | `0.25` | Detector confidence floor |
-| `--classes <yaml>` | — | `dataset.yaml` to take class names from |
 | `--device cuda\|cpu` | cuda if present | — |
-| `--fp16` | off | Autocast the restorer. CUDA only |
 | `--input-size W H` | `640 360` | What the restorer runs at |
 | `--restoration-config <yaml>` | — | Merged over `configs/restoration.yaml` |
 | `--detection-config <yaml>` | — | Merged over `configs/detection.yaml` |
 
-`demo.py` and `train.py` also take the 10 `--no-*` ablation flags. See
-[Ablation](#ablation).
+`demo.py` and `evaluate.py` add the detection flags. `train.py` does not — it only ever
+fits the restoration network.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--detector <name>` | `yolo` | `yolo` · `ssd` · `none`, or any backend registered with `@register_detector` |
+| `--det-weights <path>` | per backend, from `detection.yaml` | Detector checkpoint |
+| `--conf <float>` | `0.25` | Detector confidence floor |
+
+Class names come from `names:` in `configs/detection.yaml` — override them with a small
+`--detection-config` YAML. A YOLO checkpoint's own names win over that list.
+
+`train.py` also takes the 10 `--no-*` ablation flags. See [Ablation](#ablation). The two
+inference scripts do not need them: a checkpoint carries the architecture it was trained
+with.
 
 ---
 
@@ -45,18 +54,19 @@ that is `evaluate.py`'s job.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
+| Input | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
 | Output | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--limit N` | `0` | Cap how many pairs are processed. `0` = all |
-| `--best-per-class` | off | Keep only the highest-confidence box per class |
 | `--save-every N` | `1` | Image save interval. `0` keeps the csv only |
 | `--save-kinds a,b` | all three | Subset of `distorted`, `restored`, `panel` |
-| `--max-saved-frames N` | `0` | Hard cap on how many frame sets land on disk |
-| `--jpeg-quality N` | `92` | JPEG quality for saved images |
 | `--video` | off | Also write the 2×2 panels as `result.mp4` |
+
+Images are written at JPEG quality 92. Box size gating comes from
+`detector.min_width` / `min_height` / `min_area` in `configs/detection.yaml`; every box
+that clears it is kept, because metric code must not lose duplicates.
 
 ```bash
 python demo.py --detector ssd --conf 0.4
@@ -167,34 +177,34 @@ projection drifted in between, that is where it shows.
 ### Long unattended recording
 
 ```bash
-python demo.py --live --screen 2 --save-every 300 --max-saved-frames 50 --jpeg-quality 85
+python demo.py --live --screen 2 --save-every 300 --save-kinds panel
 ```
 
 The csv covers every frame while images land sparsely, which keeps disk usage predictable.
+`--save-every 0` drops them entirely.
 
 ---
 
 ## `evaluate.py` — score before vs after
 
-Only samples that have both `clean` and `label` are scored.
+Only samples that have both `surface` and `label` are scored.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
-| GT | `data/sample_input/` (`clean/` + `labels/`) | `--gt <dir>` |
+| Input | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
+| GT | `data/sample_input/` (`surface/` + `labels/`) | `--gt <dir>` |
 | Output | `output/Eval_<input dataset>/` | `--output <dir>` · `--name <name>` |
 
 Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--detectors yolo,ssd` | — | Compare several backends in one run, one row each |
+| `--detector yolo,ssd` | `yolo` | Comma separated here: one row per backend, compared in one run |
 | `--iou <float>` | `0.5` | IoU threshold for a true positive |
 | `--limit N` | `0` | Cap how many pairs are scored |
-| `--best-per-class` | off | Keep only the highest-confidence box per class |
 
 ```bash
-python evaluate.py --detectors yolo,ssd --iou 0.5
+python evaluate.py --detector yolo,ssd --iou 0.5
 ```
 
 The report directory is named after the input dataset, so `data/sample_input` scores into
@@ -213,19 +223,19 @@ pc.pivot_table(index="name", columns="source", values="ap")   # per-class AP shi
 under the interpolated PR curve. Not COCO's IoU-averaged metric.
 
 > `--det-weights` names one checkpoint, so it can belong to only one backend. With
-> `--detectors a,b`, say which one owns it via `--detector`. Otherwise it is warned about
-> and ignored, and both backends fall back to `configs/detection.yaml`.
+> `--detector a,b` it is warned about and ignored, and every backend falls back to
+> `configs/detection.yaml`.
 
 ---
 
 ## `train.py` — retrain the restorer
 
-Needs the training extra: `pip install -e ".[train]"`. Only complete `pro` / `beam` /
-`clean` triplets are used.
+Needs the training extra: `pip install -e ".[train]"`. Only complete `distorted` / `light` /
+`surface` triplets are used.
 
 | | Default | Change it with |
 |---|---|---|
-| Data | `train.data` in `configs/restoration.yaml` | `--pro-dir` · `--beam-dir` · `--clean-dir` |
+| Data | `train.data` in `configs/restoration.yaml` | `--data-root <dir>`, or edit `train.data` |
 | Output | `runs/<MMDD_HHMM>_<epochs>ep_<tag>/` | `--out <dir>` |
 
 Writes `restorer_<tag>_best.pt`, `epoch_N.pt`, `loss_log.csv`, `loss_plots.png`.
@@ -233,60 +243,48 @@ Writes `restorer_<tag>_best.pt`, `epoch_N.pt`, `loss_log.csv`, `loss_plots.png`.
 ### Where the training data comes from
 
 The three directories are configured, not hard-coded. Each takes a directory, a glob, or a
-list, because real captures come date-partitioned and the beam frames usually sit under a
+list, because real captures come date-partitioned and the light frames usually sit under a
 root of their own.
 
 ```yaml
 train:
   data:
-    pro:   "D:/captures/WarpData_*_pro"
-    clean: "D:/captures/WarpData_*_ori"
-    beam:  "D:/captures/Learning_video_frames"
+    distorted: "D:/captures/WarpData_*_pro"
+    surface:   "D:/captures/WarpData_*_ori"
+    light:     "D:/captures/Learning_video_frames"
 ```
 
-Resolution order, per role:
+Resolution order:
 
 ```
---pro-dir / --beam-dir / --clean-dir   >   train.data   >   --data-root
+--data-root   >   train.data   >   data/sample_input
 ```
 
-The last step only applies when **all three** are empty. One entry is enough to keep
-`--data-root` out, and the roles are independent — giving only `--pro-dir` leaves `beam`
-and `clean` on their YAML values.
+`--data-root` names one folder holding all three roles and wins outright, so a session
+built by `collect.py` needs nothing else. Leave it off and the three configured
+directories are used; those are globbed as written, so a relative path there is read
+against the working directory, not the project root — run from the repo root, or give
+absolute paths.
 
 ```bash
-python train.py --epochs 30                                    # uses train.data
-python train.py --pro-dir ... --beam-dir ... --clean-dir ...   # override for one run
+python train.py --epochs 30                              # uses train.data
+python train.py --data-root data/collected_0803          # one folder, config ignored
 ```
 
-These three paths are globbed as written, so a relative path is read against the working
-directory, not the project root. Run from the repo root, or give absolute paths.
-
-To reach `--data-root` instead, null all three out:
-
-```yaml
-# smoke.yaml
-train:
-  data: {pro: null, beam: null, clean: null}
-```
-
-```bash
-python train.py --restoration-config smoke.yaml --data-root data/sample_input
-```
-
-`--data-root` then detects the layout and looks for clean targets in this order, reading
+`--data-root` detects the layout and looks for surface targets in this order, reading
 whichever exists — no symlink or copy needed:
 
 ```
---data-root/OriginalImage/   →   --data-root/clean/   →   --gt/clean/
+--data-root/OriginalImage/  →  --data-root/surface/  →  --gt/surface/
+                            →  --data-root/clean/    →  --gt/clean/   (pre-rename)
 ```
 
-A `pro` with no matching `clean` or `beam` is counted and skipped, not fatal. The run
+A `distorted` with no matching `surface` or `light` is counted and skipped, not fatal. The run
 prints how many went each way.
 
 ```
-data: 10 triplets of 22 pro image(s) from pro=data/sample_input/pro
-      skipped 0 without a beam, 12 without a clean
+data: 10 triplets of 22 distorted image(s) from distorted=data/sample_input/distorted
+      skipped 0 without a light, 12 without a surface
 ```
 
 ### Options
@@ -320,7 +318,7 @@ which goes into both the run folder and the checkpoint filename.
 
 | Flag | Turns off | Tag |
 |---|---|---|
-| `--no-prenorm` | The pre-LayerNorm of RestormerLikeBlock | `NoPre` |
+| `--no-prenorm` | The pre-LayerNorm of NAFSEBlock | `NoPre` |
 | `--no-naf-norm` | LayerNorm2d inside NAFBlock | `NoNorm` |
 | `--no-simple-gate` | SimpleGate (`x1*x2`), replaced by GELU | `NoGate` |
 | `--no-naf-scale` | The learnable residual scales beta / gamma | `NoScale` |
@@ -341,11 +339,17 @@ Capacity can be overridden too: `--base-dim` (48), `--enc-depth` (`2,2,3`), `--d
 python train.py --no-ca --epochs 30
 ```
 
-Checkpoints embed their own architecture config, so the flags never need repeating:
+Checkpoints embed their own architecture config, so the flags never need repeating — and
+`demo.py` / `evaluate.py` do not accept them at all:
 
 ```bash
 python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
 ```
+
+The exception is a *legacy* checkpoint saved as a bare `state_dict` with no config in it.
+Those fall back to the default (`FULL`) architecture; an ablated one has to be described
+through the `ablation:` block of a `--restoration-config` YAML instead. Every checkpoint
+`train.py` writes carries its own config, so this only affects weights from elsewhere.
 
 ---
 
@@ -361,7 +365,7 @@ output/<run_name>/
 │   ├── <id>_distorted.jpg      before restoration
 │   └── <id>_restored.jpg       after restoration
 ├── frames_all/        the 2×2 figures
-│   └── <id>_panel.jpg          beam · distorted+boxes · restored+boxes · residual
+│   └── <id>_panel.jpg          light · distorted+boxes · restored+boxes · residual
 ├── calib/             --live only
 └── result.mp4         video of the 2×2 panels (--live or --video)
 ```
@@ -370,7 +374,7 @@ output/<run_name>/
 restoration afterwards, or another detector re-run over identical pixels. Boxes burnt into
 a jpg cannot be undone.
 
-Only three kinds are written. The annotated views, the residual heatmap and the beam are
+Only three kinds are written. The annotated views, the residual heatmap and the light frame are
 tiles of the panel already, so writing them again cost four extra encodes a frame and
 bought nothing. Drop kinds further with `--save-kinds`:
 
@@ -392,7 +396,7 @@ frame.
 
 Restoration is ~46% of a live frame, so it is the first thing to shrink. The network is
 fully convolutional, which makes its working resolution a runtime knob — no retraining.
-Measured on the bundled set with `--detectors yolo`:
+Measured on the bundled set with `--detector yolo`:
 
 | `--input-size` | restore | detection mAP | PSNR gain | SSIM gain |
 |---|---|---|---|---|
@@ -412,9 +416,10 @@ Going **above** 640×360 is worse on both counts. The checkpoint was trained on 
 crops resized from 360×640, and 854×480 is far enough outside that scale that quality
 drops while costing twice the time.
 
-`--fp16` and `torch.compile` are not worth reaching for. fp16 measured 2% slower — the
-network is small enough to be memory-bound, and autocast adds more than it saves. compile
-needs a Triton build Windows does not ship.
+Mixed precision and `torch.compile` are not worth reaching for, which is why neither is
+wired up. fp16 autocast measured 2% *slower* — the network is small enough to be
+memory-bound, so autocast adds more than it saves. compile needs a Triton build Windows
+does not ship.
 
 A genuinely smaller network needs retraining. At 640×360:
 

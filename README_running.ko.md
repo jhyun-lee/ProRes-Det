@@ -22,18 +22,26 @@
 
 | 플래그 | 기본값 | 의미 |
 |---|---|---|
+| `--restorer <name>` | `naf_se_unet` | 복원 백엔드. `@register_restorer`로 등록한 아무 이름 |
 | `--restorer-weights <path>` | `restoration.yaml` | 복원 체크포인트 |
-| `--detector yolo\|ssd\|none` | `yolo` | 검출 백엔드 |
-| `--det-weights <path>` | 백엔드별, `detection.yaml` | 검출기 체크포인트 |
-| `--conf <float>` | `0.25` | 검출 신뢰도 하한 |
-| `--classes <yaml>` | — | 클래스명을 가져올 `dataset.yaml` |
 | `--device cuda\|cpu` | 있으면 cuda | — |
-| `--fp16` | off | 복원기 autocast. CUDA 전용 |
 | `--input-size W H` | `640 360` | 복원기가 돌아가는 해상도 |
 | `--restoration-config <yaml>` | — | `configs/restoration.yaml` 위에 병합 |
 | `--detection-config <yaml>` | — | `configs/detection.yaml` 위에 병합 |
 
-`demo.py`와 `train.py`는 `--no-*` ablation 플래그 10개도 받는다. [Ablation](#ablation) 참고.
+검출 플래그는 `demo.py`와 `evaluate.py`만 받는다. `train.py`는 복원망만 학습하므로 없다.
+
+| 플래그 | 기본값 | 의미 |
+|---|---|---|
+| `--detector <name>` | `yolo` | `yolo` · `ssd` · `none`, 또는 `@register_detector`로 등록한 아무 백엔드 |
+| `--det-weights <path>` | 백엔드별, `detection.yaml` | 검출기 체크포인트 |
+| `--conf <float>` | `0.25` | 검출 신뢰도 하한 |
+
+클래스명은 `configs/detection.yaml`의 `names:`에서 온다. 바꾸려면 `--detection-config`로 작은
+YAML을 넘기면 된다. YOLO 체크포인트가 자체 names를 가지고 있으면 그쪽이 이긴다.
+
+`--no-*` ablation 플래그 10개는 `train.py`만 받는다. [Ablation](#ablation) 참고. 추론
+스크립트 둘은 필요 없다 — 체크포인트가 학습 당시 아키텍처를 품고 있다.
 
 ---
 
@@ -43,18 +51,19 @@
 
 | | 기본값 | 변경 |
 |---|---|---|
-| 입력 | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
+| 입력 | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
 | 출력 | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
 
 | 옵션 | 기본값 | 의미 |
 |---|---|---|
 | `--limit N` | `0` | 처리할 쌍 수 상한. `0` = 전부 |
-| `--best-per-class` | off | 클래스당 최고 신뢰도 박스만 유지 |
 | `--save-every N` | `1` | 이미지 저장 간격. `0`이면 csv만 |
 | `--save-kinds a,b` | 셋 다 | `distorted`, `restored`, `panel` 중 일부 |
-| `--max-saved-frames N` | `0` | 디스크에 남길 프레임 세트 상한 |
-| `--jpeg-quality N` | `92` | 저장 이미지 JPEG 품질 |
 | `--video` | off | 2×2 패널을 `result.mp4`로도 기록 |
+
+이미지는 JPEG 품질 92로 저장된다. 박스 크기 게이트는 `configs/detection.yaml`의
+`detector.min_width` / `min_height` / `min_area`에서 온다. 게이트를 통과한 박스는 전부
+유지된다 — 지표 계산이 중복 박스를 잃으면 안 되기 때문이다.
 
 ```bash
 python demo.py --detector ssd --conf 0.4
@@ -162,34 +171,34 @@ projector 29.1 fps (450 frames) | analysis 13.0 fps (every 2 frame(s): 201 analy
 ### 장시간 무인 녹화
 
 ```bash
-python demo.py --live --screen 2 --save-every 300 --max-saved-frames 50 --jpeg-quality 85
+python demo.py --live --screen 2 --save-every 300 --save-kinds panel
 ```
 
 csv는 모든 프레임을 덮고 이미지만 드물게 떨어져서, 디스크 사용량이 예측 가능해진다.
+`--save-every 0`이면 이미지를 아예 쓰지 않는다.
 
 ---
 
 ## `evaluate.py` — 복원 전후 점수 비교
 
-`clean`과 `label`을 **둘 다** 가진 샘플만 채점한다.
+`surface`과 `label`을 **둘 다** 가진 샘플만 채점한다.
 
 | | 기본값 | 변경 |
 |---|---|---|
-| 입력 | `data/sample_input/` (`pro/` + `beam/`) | `--input <dir>` |
-| GT | `data/sample_input/` (`clean/` + `labels/`) | `--gt <dir>` |
+| 입력 | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
+| GT | `data/sample_input/` (`surface/` + `labels/`) | `--gt <dir>` |
 | 출력 | `output/Eval_<입력 데이터셋>/` | `--output <dir>` · `--name <name>` |
 
 `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`를 쓴다.
 
 | 옵션 | 기본값 | 의미 |
 |---|---|---|
-| `--detectors yolo,ssd` | — | 여러 백엔드를 한 번에 비교, 각각 한 행 |
+| `--detector yolo,ssd` | `yolo` | 여기서는 콤마 구분. 여러 백엔드를 한 번에 비교, 각각 한 행 |
 | `--iou <float>` | `0.5` | TP 판정 IoU 임계값 |
 | `--limit N` | `0` | 채점할 쌍 수 상한 |
-| `--best-per-class` | off | 클래스당 최고 신뢰도 박스만 유지 |
 
 ```bash
-python evaluate.py --detectors yolo,ssd --iou 0.5
+python evaluate.py --detector yolo,ssd --iou 0.5
 ```
 
 리포트 디렉터리는 입력 데이터셋 이름을 따른다. `data/sample_input`은
@@ -208,19 +217,19 @@ pc.pivot_table(index="name", columns="source", values="ap")   # 클래스별 AP 
 COCO의 IoU 평균 지표가 아니다.
 
 > `--det-weights`는 체크포인트 하나를 가리키므로 백엔드 하나에만 속할 수 있다.
-> `--detectors a,b`와 함께 쓸 때는 `--detector`로 소유 백엔드를 지정할 것. 지정하지 않으면
-> 경고 후 무시되고, 두 백엔드 모두 `configs/detection.yaml`로 폴백한다.
+> `--detector a,b`처럼 여러 개를 비교할 때는 경고 후 무시되고, 모든 백엔드가
+> `configs/detection.yaml`로 폴백한다.
 
 ---
 
 ## `train.py` — 복원기 재학습
 
-학습 extra 필요: `pip install -e ".[train]"`. `pro` / `beam` / `clean` 삼중쌍이 완성된
+학습 extra 필요: `pip install -e ".[train]"`. `distorted` / `light` / `surface` 삼중쌍이 완성된
 것만 사용한다.
 
 | | 기본값 | 변경 |
 |---|---|---|
-| 데이터 | `configs/restoration.yaml`의 `train.data` | `--pro-dir` · `--beam-dir` · `--clean-dir` |
+| 데이터 | `configs/restoration.yaml`의 `train.data` | `--data-root <dir>`, 또는 `train.data` 수정 |
 | 출력 | `runs/<MMDD_HHMM>_<epochs>ep_<tag>/` | `--out <dir>` |
 
 `restorer_<tag>_best.pt`, `epoch_N.pt`, `loss_log.csv`, `loss_plots.png`를 쓴다.
@@ -228,58 +237,46 @@ COCO의 IoU 평균 지표가 아니다.
 ### 학습 데이터가 오는 곳
 
 세 디렉터리는 하드코딩이 아니라 설정값이다. 각 항목은 디렉터리, glob, 또는 리스트를 받는다.
-실제 촬영본은 날짜로 분할되고 beam 프레임은 보통 따로 있는 루트에 놓이기 때문이다.
+실제 촬영본은 날짜로 분할되고 light 프레임은 보통 따로 있는 루트에 놓이기 때문이다.
 
 ```yaml
 train:
   data:
-    pro:   "D:/captures/WarpData_*_pro"
-    clean: "D:/captures/WarpData_*_ori"
-    beam:  "D:/captures/Learning_video_frames"
+    distorted: "D:/captures/WarpData_*_pro"
+    surface:   "D:/captures/WarpData_*_ori"
+    light:     "D:/captures/Learning_video_frames"
 ```
 
-역할별 결정 순서:
+결정 순서:
 
 ```
---pro-dir / --beam-dir / --clean-dir   >   train.data   >   --data-root
+--data-root   >   train.data   >   data/sample_input
 ```
 
-마지막 단계는 **셋 다 비었을 때만** 적용된다. 하나만 있어도 `--data-root`는 밀려난다. 그리고
-역할은 서로 독립이라 `--pro-dir`만 주면 `beam`과 `clean`은 YAML 값이 유지된다.
+`--data-root`는 세 역할을 모두 담은 폴더 하나를 가리키며 무조건 이긴다. `collect.py`로 만든
+세션은 이것만 주면 된다. 주지 않으면 설정된 세 디렉터리를 쓰는데, 그 경로들은 그대로
+glob되므로 상대 경로가 프로젝트 루트가 아니라 **작업 디렉터리** 기준으로 읽힌다. 저장소
+루트에서 실행하거나 절대 경로를 쓸 것.
 
 ```bash
-python train.py --epochs 30                                    # train.data 사용
-python train.py --pro-dir ... --beam-dir ... --clean-dir ...   # 1회성 오버라이드
+python train.py --epochs 30                        # train.data 사용
+python train.py --data-root data/collected_0803    # 폴더 하나, 설정은 무시됨
 ```
 
-이 세 경로는 그대로 glob되므로 상대 경로는 프로젝트 루트가 아니라 **작업 디렉터리** 기준으로
-읽힌다. 저장소 루트에서 실행하거나 절대 경로를 쓸 것.
-
-`--data-root`까지 내려가게 하려면 세 값을 null로 덮는다:
-
-```yaml
-# smoke.yaml
-train:
-  data: {pro: null, beam: null, clean: null}
-```
-
-```bash
-python train.py --restoration-config smoke.yaml --data-root data/sample_input
-```
-
-그러면 `--data-root`가 레이아웃을 자동 감지하고, clean 타깃을 이 순서로 찾아 존재하는 쪽을
+`--data-root`는 레이아웃을 자동 감지하고, surface 타깃을 이 순서로 찾아 존재하는 쪽을
 바로 읽는다. 심볼릭 링크나 복사는 필요 없다:
 
 ```
---data-root/OriginalImage/   →   --data-root/clean/   →   --gt/clean/
+--data-root/OriginalImage/  →  --data-root/surface/  →  --gt/surface/
+                            →  --data-root/clean/    →  --gt/clean/   (pre-rename)
 ```
 
-짝이 없는 `pro`는 치명적 오류가 아니라 집계 후 스킵된다. 실행 시 몇 개가 어느 쪽으로 갔는지
+짝이 없는 `distorted`는 치명적 오류가 아니라 집계 후 스킵된다. 실행 시 몇 개가 어느 쪽으로 갔는지
 출력된다.
 
 ```
-data: 10 triplets of 22 pro image(s) from pro=data/sample_input/pro
-      skipped 0 without a beam, 12 without a clean
+data: 10 triplets of 22 distorted image(s) from distorted=data/sample_input/distorted
+      skipped 0 without a light, 12 without a surface
 ```
 
 ### 옵션
@@ -313,7 +310,7 @@ python train.py --resume runs/0730_1948_30ep_FULL/restorer_FULL_best.pt --epochs
 
 | 플래그 | 끄는 것 | Tag |
 |---|---|---|
-| `--no-prenorm` | RestormerLikeBlock의 pre-LayerNorm | `NoPre` |
+| `--no-prenorm` | NAFSEBlock의 pre-LayerNorm | `NoPre` |
 | `--no-naf-norm` | NAFBlock 내부 LayerNorm2d | `NoNorm` |
 | `--no-simple-gate` | SimpleGate (`x1*x2`) → GELU로 대체 | `NoGate` |
 | `--no-naf-scale` | 학습 가능한 residual 스케일 beta / gamma | `NoScale` |
@@ -333,11 +330,17 @@ python train.py --resume runs/0730_1948_30ep_FULL/restorer_FULL_best.pt --epochs
 python train.py --no-ca --epochs 30
 ```
 
-체크포인트가 자신의 아키텍처 config를 품고 있어서 플래그를 다시 쓸 필요가 없다:
+체크포인트가 자신의 아키텍처 config를 품고 있어서 플래그를 다시 쓸 필요가 없다. `demo.py`와
+`evaluate.py`는 아예 받지도 않는다:
 
 ```bash
 python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
 ```
+
+예외는 config 없이 순수 `state_dict`로 저장된 *레거시* 체크포인트다. 이 경우 기본(`FULL`)
+아키텍처로 폴백하므로, ablation된 레거시 가중치는 `--restoration-config` YAML의 `ablation:`
+블록으로 구조를 알려줘야 한다. `train.py`가 쓰는 체크포인트는 전부 config를 품으므로 외부에서
+받은 가중치에만 해당한다.
 
 ---
 
@@ -353,7 +356,7 @@ output/<run_name>/
 │   ├── <id>_distorted.jpg      복원 전
 │   └── <id>_restored.jpg       복원 후
 ├── frames_all/        2×2 비교 figure
-│   └── <id>_panel.jpg          beam · distorted+box · restored+box · residual
+│   └── <id>_panel.jpg          light · distorted+box · restored+box · residual
 ├── calib/             --live 전용
 └── result.mp4         2×2 패널 영상 (--live 또는 --video)
 ```
@@ -383,7 +386,7 @@ python demo.py --save-kinds distorted,restored   # 재채점 가능한 픽셀만
 
 복원이 라이브 프레임의 약 46%다. 그래서 가장 먼저 줄일 대상이다. 네트워크가 fully
 convolutional이라 작동 해상도가 런타임 노브가 된다 — 재학습 없이. 번들 데이터셋,
-`--detectors yolo` 기준 측정:
+`--detector yolo` 기준 측정:
 
 | `--input-size` | 복원 | 검출 mAP | PSNR 이득 | SSIM 이득 |
 |---|---|---|---|---|
@@ -402,9 +405,9 @@ python demo.py --live --screen 2 --input-size 480 270
 640×360 **위로** 가면 양쪽 다 나빠진다. 체크포인트는 360×640에서 리사이즈한 180×320 크롭으로
 학습됐고, 854×480은 그 스케일에서 충분히 벗어나 복원 품질이 떨어지면서 시간은 두 배가 된다.
 
-`--fp16`과 `torch.compile`은 손댈 가치가 없다. fp16은 2% 더 느리게 측정됐다 — 네트워크가
-memory-bound일 만큼 작고, autocast가 절약분보다 더 든다. compile은 Windows가 제공하지 않는
-Triton 빌드를 요구한다.
+mixed precision과 `torch.compile`은 손댈 가치가 없다. 그래서 둘 다 연결하지 않았다. fp16
+autocast는 2% 더 *느리게* 측정됐다 — 네트워크가 memory-bound일 만큼 작아서 autocast가
+절약분보다 더 든다. compile은 Windows가 제공하지 않는 Triton 빌드를 요구한다.
 
 진짜 더 작은 네트워크는 재학습이 필요하다. 640×360 기준:
 

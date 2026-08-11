@@ -33,9 +33,8 @@ from projector_distortion.cli import (  # noqa: E402
     add_common_args, box_filter_kwargs, build_models, run_dir,
 )
 from projector_distortion.config import resolve_path  # noqa: E402
-from projector_distortion.models.restoration import add_ablation_args  # noqa: E402
 from projector_distortion.utils.recording import (  # noqa: E402
-    DEFAULT_FRAME_KINDS, FRAME_KINDS, RunRecorder, estimate_footprint_mb, parse_kinds,
+    FRAME_KINDS, KIND_DIRS, RunRecorder, parse_kinds,
 )
 from projector_distortion.utils.visualize import panel_size  # noqa: E402
 
@@ -45,21 +44,16 @@ def build_parser():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
     p.add_argument("--input", default=DEFAULT_INPUT,
-                   help="folder of pro/beam pairs (offline mode)")
+                   help="folder of distorted/light pairs (offline mode)")
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="where run folders go")
     p.add_argument("--name", default=None, help="run folder name (default: timestamp)")
     p.add_argument("--limit", type=int, default=0, help="process at most N pairs")
-    p.add_argument("--best-per-class", action="store_true",
-                   help="keep only the top box per class (original demo behaviour)")
 
     r = p.add_argument_group("recording")
     r.add_argument("--save-every", type=int, default=1,
                    help="write images every N frames (0 = none; csv is always complete)")
-    r.add_argument("--save-kinds", default=",".join(DEFAULT_FRAME_KINDS),
-                   help=f"subset of {','.join(FRAME_KINDS)} "
-                        f"(default: {','.join(DEFAULT_FRAME_KINDS)})")
-    r.add_argument("--max-saved-frames", type=int, default=0, help="cap on saved frames")
-    r.add_argument("--jpeg-quality", type=int, default=92)
+    r.add_argument("--save-kinds", default=",".join(FRAME_KINDS),
+                   help=f"subset of {','.join(FRAME_KINDS)} (default: all of them)")
     r.add_argument("--video", action="store_true",
                    help="also write result.mp4 of the 2x2 panels (offline mode)")
 
@@ -95,14 +89,15 @@ def build_parser():
                            "either way.")
 
     add_common_args(p)
-    # Only needed when the checkpoint is a bare state_dict with no embedded config.
-    add_ablation_args(p, capacity=False)
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    kinds = parse_kinds(args.save_kinds)
+    try:
+        kinds = parse_kinds(args.save_kinds)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
 
     restorer, detector, info = build_models(args, need_detector=True)
     box_filter = box_filter_kwargs(args, info["detection_config"])
@@ -112,24 +107,19 @@ def main(argv=None):
     video_size = panel_size(*info["input_size"])
 
     with RunRecorder(out_dir, save_every=args.save_every, frame_kinds=kinds,
-                     jpeg_quality=args.jpeg_quality,
-                     max_saved_frames=args.max_saved_frames,
                      video_size=video_size if want_video else None) as rec:
         rec.set(mode="live" if args.live else "offline",
                 restorer=restorer.info(),
                 detector=detector.info(),
                 box_filter=box_filter, device=info["device"],
                 recording={"save_every": args.save_every, "frame_kinds": list(kinds),
-                           "jpeg_quality": args.jpeg_quality,
-                           "max_saved_frames": args.max_saved_frames,
                            "video": bool(want_video)})
         print(f"output: {out_dir}")
 
         if args.live:
-            summary = _run_live(args, restorer, detector, rec, box_filter,
-                                info["input_size"])
+            summary = _run_live(args, restorer, detector, rec, box_filter)
         else:
-            summary = _run_offline(args, restorer, detector, rec, box_filter, kinds)
+            summary = _run_offline(args, restorer, detector, rec, box_filter)
 
         meta = rec.finish(**summary)
 
@@ -137,7 +127,7 @@ def main(argv=None):
     return 0
 
 
-def _run_live(args, restorer, detector, rec, box_filter, input_size):
+def _run_live(args, restorer, detector, rec, box_filter):
     import cv2
 
     from projector_distortion.pipeline.live import run_live  # noqa: F401
@@ -163,20 +153,14 @@ def _run_live(args, restorer, detector, rec, box_filter, input_size):
         **common, **box_filter)
 
 
-def _run_offline(args, restorer, detector, rec, box_filter, kinds):
+def _run_offline(args, restorer, detector, rec, box_filter):
     from projector_distortion.pipeline import run_offline
 
     input_root = resolve_path(args.input)
     if not input_root or not os.path.isdir(input_root):
         raise SystemExit(
             f"input folder not found: {args.input}\n"
-            f"    expected pro/ and beam/ subfolders; see data/README_data.md")
-
-    pro_dir = os.path.join(input_root, "pro")
-    n_pairs = len(os.listdir(pro_dir)) if os.path.isdir(pro_dir) else 0
-    budget = estimate_footprint_mb(kinds, args.save_every, n_pairs)
-    print(f"    images every {args.save_every or '-'} frames x {len(kinds)} "
-          f"kinds ~ {budget:.0f} MB")
+            f"    expected distorted/ and light/ subfolders; see data/README_data.md")
 
     return run_offline(input_root, restorer, detector, rec,
                        limit=args.limit, detector_name=detector.name, **box_filter)
@@ -213,9 +197,27 @@ def _report(meta, summary, detector, out_dir):
           + (f"   ({summary['writes_dropped']} frame(s) outran the writer)"
              if summary.get("writes_dropped") else ""))
     print(f"  -> {out_dir}")
-    print("     run_meta.json | detections.csv | captures/ | frames_all/"
-          + (" | calib/" if meta.get("mode") == "live" else ""))
+    print(f"     {_artefacts(meta)}")
     print("     score it with:  python evaluate.py")
+
+
+def _artefacts(meta) -> str:
+    """
+    What this run actually wrote.
+
+    The image directories only exist when --save-every and --save-kinds asked for
+    them, so a fixed list sent people looking for folders that were never created.
+    """
+    names = ["run_meta.json", "detections.csv"]
+    rec = meta.get("recording") or {}
+    if rec.get("save_every"):
+        names += sorted({f"{KIND_DIRS[k]}/" for k in rec.get("frame_kinds") or ()
+                         if k in KIND_DIRS})
+    if meta.get("mode") == "live":
+        names.append("calib/")
+    if "video_mb" in meta:
+        names.append("result.mp4")
+    return " | ".join(names)
 
 
 if __name__ == "__main__":
