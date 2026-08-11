@@ -1,0 +1,208 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "BlueBerry",
+      "points": [
+        [
+          46.011560693641655,
+          31.44508670520237
+        ],
+        [
+          136.1849710982666,
+          114.68208092485557
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Punica",
+      "points": [
+        [
+          149.19075144508673,
+          32.0231213872833
+        ],
+        [
+          231.84971098265896,
+          112.65895953757224
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "GreenApple",
+      "points": [
+        [
+          186.76300578034687,
+          257.74566473988443
+        ],
+        [
+          269.4219653179191,
+          338.3815028901734
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Peach",
+      "points": [
+        [
+          498.3236994219654,
+          27.68786127167637
+        ],
+        [
+          584.7398843930637,
+          110.635838150289
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Lemon",
+      "points": [
+        [
+          501.79190751445105,
+          135.49132947976886
+        ],
+        [
+          592.5433526011561,
+          221.32947976878611
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Kiwi",
+      "points": [
+        [
+          510.4624277456649,
+          243.29479768786132
+        ],
+        [
+          597.1676300578035,
+          324.21965317919074
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Orange",
+      "points": [
+        [
+          398.9017341040463,
+          265.54913294797694
+        ],
+        [
+          485.02890173410407,
+          345.8959537572254
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Apple",
+      "points": [
+        [
+          398.61271676300584,
+          23.06358381502895
+        ],
+        [
+          481.2716763005781,
+          103.6994219653179
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Pear",
+      "points": [
+        [
+          287.0520231213873,
+          140.69364161849717
+        ],
+        [
+          369.7109826589596,
+          221.32947976878617
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Watermelon",
+      "points": [
+        [
+          46.30057803468216,
+          257.1676300578035
+        ],
+        [
+          128.95953757225442,
+          337.80346820809245
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Melon",
+      "points": [
+        [
+          45.722543352601235,
+          148.7861271676301
+        ],
+        [
+          128.38150289017364,
+          229.42196531791905
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "Ori0419201534.jpg",
+  "imageData": null,
+  "imageHeight": 360,
+  "imageWidth": 640
+}
