@@ -57,7 +57,7 @@ the webcam and Win32 window plumbing (`utils/display.py`) it has no use for.
 | [`__init__.py`](__init__.py) | Public API re-exports, `__version__` |
 | [`cli.py`](cli.py) | Shared argparse groups, config precedence, `build_models`, device resolution, `run_dir`, and the `pdf-*` console entry points |
 | [`config.py`](config.py) | `load_config` (YAML + recursive merge), `resolve_path` (against `PROJECT_ROOT`), `pick` (CLI over YAML) |
-| [`data.py`](data.py) | Filename → id parsing, layout detection, `find_samples`, `index_triplets`, YOLO label loading, `TripletPatchDataset` |
+| [`data.py`](data.py) | Filename → id parsing, layout detection, `find_samples`, `index_triplets`, label loading (YOLO txt and LabelMe json), `TripletPatchDataset` |
 
 ### `configs/`
 
@@ -150,8 +150,15 @@ class Detection:
 class Sample:
     name_id: str; distorted: str; light: str
     surface: str | None = None      # optional: needed to score
-    label: str | None = None
+    label: str | None = None        # .txt (YOLO) or .json (LabelMe)
+
+def load_labels(path, img_w, img_h, class_names=None) -> [(cls_id, (x1,y1,x2,y2)), ...]
 ```
+
+`load_labels` dispatches on the extension, so the pipeline never learns which annotator
+produced a split. `class_names` is only consulted for LabelMe, which stores class names
+rather than ids; passing the detector's own list keeps ground truth and predictions on one
+set of ids.
 
 ```python
 # pipeline/offline.py
@@ -182,7 +189,7 @@ from projector_distortion.pipeline import process_sample
 
 restorer = build_restorer("weights/restorer_nafse_unet.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-root = "data/sample_input"               # distorted/ light/ + surface/ labels/ for scoring
+root = "data/SampleData/sample_eval"     # distorted/ light/ + surface/ labels/ for scoring
 for i, s in enumerate(find_samples(root, root)):
     r = process_sample(s, restorer, detector, frame_id=i)
     print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
@@ -199,7 +206,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 
 ## Tests
 
-107 tests, no hardware needed.
+114 tests, no hardware needed.
 
 | File | Covers |
 |---|---|

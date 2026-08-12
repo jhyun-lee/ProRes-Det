@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from ..data import Sample, find_samples, load_yolo_labels
+from ..data import Sample, find_samples, load_labels
 from ..models import filter_detections
 from ..utils.image import psnr, read_bgr, resize, ssim
 from ..utils.visualize import draw_detections, grid_2x2
@@ -86,7 +86,9 @@ def process_sample(sample: Sample, restorer, detector, frame_id=0,
     surface_img, gt_boxes = None, []
     if with_gt and sample.surface:
         surface_img = resize(read_bgr(sample.surface), size)
-        gt_boxes = load_yolo_labels(sample.label, size[0], size[1])
+        # LabelMe labels name their classes, so they need the detector's own id order.
+        gt_boxes = load_labels(sample.label, size[0], size[1],
+                               class_names=getattr(detector, "class_names", None))
 
     return FrameResult(
         frame_id=frame_id, name_id=sample.name_id,

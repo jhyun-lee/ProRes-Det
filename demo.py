@@ -5,7 +5,8 @@ Restore projector distortion, then detect objects - in one command.
 
 Offline (default, no hardware):
     python demo.py
-    python demo.py --input data/sample_input --output output --save-every 1
+    python demo.py --input data/SampleData/sample_eval --output output --save-every 1
+    python demo.py --input data/SampleData/sample_test # the held-out split
     python demo.py --detector ssd --conf 0.4
     python demo.py --detector none                  # restoration only
 

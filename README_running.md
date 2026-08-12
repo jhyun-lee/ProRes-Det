@@ -54,7 +54,7 @@ that is `evaluate.py`'s job.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
+| Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
 | Output | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
 
 | Option | Default | Meaning |
@@ -191,9 +191,18 @@ Only samples that have both `surface` and `label` are scored.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
-| GT | `data/sample_input/` (`surface/` + `labels/`) | `--gt <dir>` |
+| Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
+| GT | `data/SampleData/sample_eval/` (`surface/` + `labels/`) | `--gt <dir>` |
 | Output | `output/Eval_<input dataset>/` | `--output <dir>` · `--name <name>` |
+
+`labels/` may hold YOLO `.txt` or LabelMe `.json`; the extension decides which reader runs,
+so the held-out split needs nothing but its path. LabelMe stores class *names*, and those
+are matched against the detector's own class list — see
+[data/README_data.md](data/README_data.md#label-format).
+
+```bash
+python evaluate.py --input data/SampleData/sample_test --gt data/SampleData/sample_test
+```
 
 Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
 
@@ -207,15 +216,16 @@ Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
 python evaluate.py --detector yolo,ssd --iou 0.5
 ```
 
-The report directory is named after the input dataset, so `data/sample_input` scores into
-`output/Eval_sample_input/`. Re-running the same dataset replaces it, and stale
-per-backend csvs from the previous run are cleared first.
+The report directory is named after the input dataset, so `data/SampleData/sample_eval`
+scores into `output/Eval_sample_eval/` and the test split into `output/Eval_sample_test/`.
+Re-running the same dataset replaces it, and stale per-backend csvs from the previous run
+are cleared first.
 
 A summary table is printed. Per-class P / R / F1 / AP goes into the csv.
 
 ```python
 import pandas as pd
-pc = pd.read_csv("output/Eval_sample_input/per_class_yolo.csv")
+pc = pd.read_csv("output/Eval_sample_eval/per_class_yolo.csv")
 pc.pivot_table(index="name", columns="source", values="ap")   # per-class AP shift
 ```
 
@@ -257,8 +267,12 @@ train:
 Resolution order:
 
 ```
---data-root   >   train.data   >   data/sample_input
+--data-root   >   train.data   >   data/SampleData/sample_train
 ```
+
+`train.data` ships pointed at `sample_train`, the only split with no labels — training
+never needs them. `sample_eval` and `sample_test` are held out for `evaluate.py`; pointing
+`train.data` at either would score the model on what it fitted.
 
 `--data-root` names one folder holding all three roles and wins outright, so a session
 built by `collect.py` needs nothing else. Leave it off and the three configured
@@ -283,8 +297,8 @@ A `distorted` with no matching `surface` or `light` is counted and skipped, not 
 prints how many went each way.
 
 ```
-data: 10 triplets of 22 distorted image(s) from distorted=data/sample_input/distorted
-      skipped 0 without a light, 12 without a surface
+data: 994 triplets of 1,000 distorted image(s) from distorted=data/SampleData/sample_train/distorted
+      skipped 6 without a light, 0 without a surface
 ```
 
 ### Options

@@ -57,7 +57,7 @@ demo.py / evaluate.py / train.py
 | [`__init__.py`](__init__.py) | 공개 API 재노출, `__version__` |
 | [`cli.py`](cli.py) | 공용 argparse 그룹, config 우선순위, `build_models`, 디바이스 결정, `run_dir`, `pdf-*` 콘솔 엔트리포인트 |
 | [`config.py`](config.py) | `load_config` (YAML + 재귀 병합), `resolve_path` (`PROJECT_ROOT` 기준), `pick` (CLI가 YAML보다 우선) |
-| [`data.py`](data.py) | 파일명 → id 파싱, 레이아웃 감지, `find_samples`, `index_triplets`, YOLO 라벨 로딩, `TripletPatchDataset` |
+| [`data.py`](data.py) | 파일명 → id 파싱, 레이아웃 감지, `find_samples`, `index_triplets`, 라벨 로딩(YOLO txt·LabelMe json), `TripletPatchDataset` |
 
 ### `configs/`
 
@@ -147,8 +147,14 @@ class Detection:
 class Sample:
     name_id: str; distorted: str; light: str
     surface: str | None = None      # 선택: 채점에만 필요
-    label: str | None = None
+    label: str | None = None        # .txt (YOLO) 또는 .json (LabelMe)
+
+def load_labels(path, img_w, img_h, class_names=None) -> [(cls_id, (x1,y1,x2,y2)), ...]
 ```
+
+`load_labels`가 확장자로 분기하므로, 파이프라인은 어느 주석 도구가 만든 split인지 알 필요가
+없다. `class_names`는 LabelMe에서만 쓰인다. LabelMe는 클래스를 id가 아니라 이름으로
+저장하기 때문이며, 탐지기 자신의 목록을 넘기면 정답과 예측이 같은 id 체계 위에 놓인다.
 
 ```python
 # pipeline/offline.py
@@ -178,7 +184,7 @@ from projector_distortion.pipeline import process_sample
 
 restorer = build_restorer("weights/restorer_nafse_unet.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-root = "data/sample_input"               # distorted/ light/ + 채점용 surface/ labels/
+root = "data/SampleData/sample_eval"     # distorted/ light/ + 채점용 surface/ labels/
 for i, s in enumerate(find_samples(root, root)):
     r = process_sample(s, restorer, detector, frame_id=i)
     print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
@@ -195,7 +201,7 @@ for i, s in enumerate(find_samples(root, root)):
 
 ## 테스트
 
-107개, 하드웨어 불필요.
+114개, 하드웨어 불필요.
 
 | 파일 | 커버 |
 |---|---|

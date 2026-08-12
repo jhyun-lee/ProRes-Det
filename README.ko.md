@@ -7,20 +7,16 @@
 
 복원 모델과 검출기 모두 작은 인터페이스 뒤에 있어, 파이프라인을 건드리지 않고 교체할 수 있다.
 
-```
-        카메라 촬영 (distorted)  ─┐
-                            ├─▶ 복원기 ─▶ residual ─▶ restored = distorted − residual
-   투사된 원본 (light)  ────┘                            │
-                                                        │
-           detector(distorted) ◀── 복원 전            복원 후 ──▶ detector(restored)
-                  └────────── 비교: mAP / PSNR / SSIM ──────────┘
-```
+![프레임워크: 라이브와 오프라인 입력이 하나의 프레임 쌍으로 모여 복원 → 검출 → 실행 기록기로 흐른다. 두 모델 단계 모두 YAML과 CLI 플래그로 설정하는 교체 가능한 백엔드다.](Image/Framework.png)
+
+두 모드 모두 같은 `(distorted, light)` 프레임 쌍으로 수렴하므로 그 이후는 전부 공유된다.
+`evaluate.py`는 복원 단계의 양쪽에서 검출기를 돌려 그 차이를 점수화한다 — mAP, PSNR, SSIM.
 
 | 문서 | 담당 |
 |---|---|
 | [README_running.ko.md](README_running.ko.md) | `demo.py` · `evaluate.py` · `train.py` — 모든 옵션, 입력, 출력 |
 | [projector_distortion/README_code.ko.md](projector_distortion/README_code.ko.md) | 모듈별 책임, 호출 그래프, 공개 API |
-| [data/README_data.ko.md](data/README_data.ko.md) | 데이터셋 구조, 파일명 규칙, 라벨, `collect.py`, `record.py` |
+| [data/README_data.ko.md](data/README_data.ko.md) | 세 개의 split, 구조, 파일명 규칙, 라벨 포맷 두 가지, `collect.py`, `record.py` |
 | [weights/README_weights.ko.md](weights/README_weights.ko.md) | 체크포인트 3개, 체크포인트 포맷, residual 규약 |
 
 ---
@@ -66,8 +62,20 @@ python data/collect.py capture    # 직접 수집 (4단계)     → data/collect
 python data/record.py --screen 2  # 투사 + 녹화, 모델 없음 → data/recordings/
 ```
 
-앞 두 개는 인자가 필요 없다. 샘플 데이터와 체크포인트 3개가 git에 추적되므로 클론 직후 바로
+앞 세 개는 인자가 필요 없다. 샘플 데이터와 체크포인트 3개가 git에 추적되므로 클론 직후 바로
 돌아간다.
+
+번들 데이터셋은 `data/SampleData/` 아래 세 갈래로 분할되어 있고, 각 진입점이 자기 split을
+기본값으로 쓴다:
+
+| Split | 내용 | 기본값인 곳 |
+|---|---|---|
+| `sample_train` | 1,000쌍, 20장면, 라벨 없음 | `train.py` |
+| `sample_eval` | 22쌍, 10장면, 박스 107개 | `demo.py`, `evaluate.py` |
+| `sample_test` | 200쌍, 5장면, 박스 53개 | 홀드아웃 — `--input`/`--gt`로 지정해야 도달 |
+
+장면이 겹치지 않으므로 `sample_train`으로 학습한 모델은 본 적 없는 프레임에서 채점된다.
+자세한 내용과 라벨 포맷 두 가지: [data/README_data.ko.md](data/README_data.ko.md).
 
 **저장소 루트에서 실행할 것.** config 경로는 프로젝트 루트 기준으로 해석되지만, `train.data`
 glob은 작업 디렉터리 기준으로 읽힌다.
@@ -91,6 +99,11 @@ python demo.py --limit 5          # 앞 5쌍만
 
 모든 옵션과 입출력: [README_running.ko.md](README_running.ko.md).
 
+![파이프라인: 1단계는 surface 촬영과 투사 프레임을 모아 ROI를 정합해 distorted 이미지를 만들고, 2단계는 투사 이미지와 distorted 이미지를 3레벨 U-Net에 넣어 빼낼 residual을 예측하며, 3단계는 distorted와 restored 양쪽에 검출기를 돌려 비교한다.](Image/Pipeline.png)
+
+1단계는 `data/collect.py`, 2단계는 `train.py`와 복원기, 3단계는 `demo.py`와 `evaluate.py`다.
+동봉된 샘플 데이터가 1단계 산출물을 이미 담고 있어, 클론하면 2단계부터 시작한다.
+
 ---
 
 ## 3. 구조
@@ -108,9 +121,11 @@ ProRes-Det/
 │   ├── pipeline/             오프라인 / 라이브 실행 루프
 │   └── utils/                이미지, 시각화, 기록, 디스플레이 헬퍼
 │
-├── tests/                    pytest 스위트, 107개
+├── tests/                    pytest 스위트, 114개
 ├── weights/                  체크포인트 3개, 51 MiB, git 추적
-├── data/                     샘플 데이터셋 + collect.py / record.py, 추적 81 MiB
+├── data/                     SampleData/ (train · eval · test) + collect.py / record.py,
+│                             추적 305 MiB
+├── Image/                    위 그림 2장
 └── output/                   실행 산출물 (git 무시)
 ```
 
@@ -128,7 +143,7 @@ configs/*.yaml  <  --restoration-config / --detection-config 로 넘긴 YAML  < 
 | 파일 | 내용 |
 |---|---|
 | [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | 복원 가중치, 입력 크기, 구조 토글, 학습 하이퍼파라미터, 손실 가중치, 학습 데이터 경로 |
-| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | 백엔드, 백엔드별 가중치, conf 임계값, 박스 크기 필터, 17개 클래스명 |
+| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | 백엔드, 백엔드별 가중치, conf 임계값, 박스 크기 필터, 17개 클래스명 — LabelMe 라벨의 클래스 *이름*도 이 목록과 대조된다 |
 
 일부만 덮으려면 바꿀 키만 담은 YAML을 넘긴다. 재귀 병합된다.
 

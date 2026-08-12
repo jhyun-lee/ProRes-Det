@@ -8,20 +8,17 @@ removes that light, then measures object detection before and after the removal.
 The restoration model and the detector both sit behind small interfaces, so either can be
 swapped without touching the pipeline.
 
-```
-        camera capture (distorted)  ─┐
-                               ├─▶ restorer ─▶ residual ─▶ restored = distorted − residual
-   projected source (light)  ──┘                              │
-                                                             │
-              detector(distorted) ◀── before              after ──▶ detector(restored)
-                     └────────── compare: mAP / PSNR / SSIM ──────────┘
-```
+![Framework: live and offline capture feed one frame pair into restoration, then detection, then the run recorder. Both model stages are interchangeable backends configured from YAML plus CLI flags.](Image/Framework.png)
+
+Both modes converge on the same `(distorted, light)` frame pair, so everything downstream
+is shared. `evaluate.py` runs the detector on both sides of the restoration step and scores
+the difference — mAP, PSNR, SSIM.
 
 | Guide | Covers |
 |---|---|
 | [README_running.md](README_running.md) | `demo.py` · `evaluate.py` · `train.py` — every option, input, output |
 | [projector_distortion/README_code.md](projector_distortion/README_code.md) | What each module owns, the call graph, the public API |
-| [data/README_data.md](data/README_data.md) | Dataset layout, filename rules, labels, `collect.py`, `record.py` |
+| [data/README_data.md](data/README_data.md) | The three splits, layout, filename rules, both label formats, `collect.py`, `record.py` |
 | [weights/README_weights.md](weights/README_weights.md) | The three checkpoints, checkpoint format, the residual convention |
 
 ---
@@ -67,8 +64,20 @@ python data/collect.py capture    # collect your own data (4 stages) → data/co
 python data/record.py --screen 2  # project + record, no models      → data/recordings/
 ```
 
-The first two need no arguments. Sample data and all three checkpoints are tracked in git,
-so a clone runs as-is.
+The first three need no arguments. Sample data and all three checkpoints are tracked in
+git, so a clone runs as-is.
+
+The bundled dataset is split three ways under `data/SampleData/`, and each entry point
+defaults to its own split:
+
+| Split | Contents | Default for |
+|---|---|---|
+| `sample_train` | 1,000 pairs, 20 scenes, no labels | `train.py` |
+| `sample_eval` | 22 pairs, 10 scenes, 107 boxes | `demo.py`, `evaluate.py` |
+| `sample_test` | 200 pairs, 5 scenes, 53 boxes | held out — pass `--input`/`--gt` to reach it |
+
+The scenes do not overlap, so a model trained on `sample_train` is scored on frames it has
+never seen. Details and the two label formats: [data/README_data.md](data/README_data.md).
 
 **Run from the repo root.** Config paths resolve against the project root, but the
 `train.data` globs are read against the working directory.
@@ -92,6 +101,12 @@ Pass anything if you do not know it — the table prints first.
 
 Every option, input and output: [README_running.md](README_running.md).
 
+![Pipeline: step 1 collects a surface shot and a projected frame, then rectifies the ROI into a distorted image; step 2 feeds the projected and distorted images to the 3-level U-Net, which predicts a residual to subtract; step 3 runs the detector on the distorted and the restored image and compares the two.](Image/Pipeline.png)
+
+Step 1 is `data/collect.py`, step 2 is `train.py` and the restorer, step 3 is `demo.py` and
+`evaluate.py`. The bundled sample data already carries step 1's output, so a clone starts
+at step 2.
+
 ---
 
 ## 3. Layout
@@ -109,9 +124,11 @@ ProRes-Det/
 │   ├── pipeline/             offline / live run loops
 │   └── utils/                image, visualization, recording and display helpers
 │
-├── tests/                    pytest suite, 107 tests
+├── tests/                    pytest suite, 114 tests
 ├── weights/                  3 checkpoints, 51 MiB, tracked in git
-├── data/                     sample dataset + collect.py / record.py, 81 MiB tracked
+├── data/                     SampleData/ (train · eval · test) + collect.py / record.py,
+│                             305 MiB tracked
+├── Image/                    the two figures above
 └── output/                   run artefacts (git-ignored)
 ```
 
@@ -129,7 +146,7 @@ configs/*.yaml  <  YAML via --restoration-config / --detection-config  <  CLI fl
 | File | Holds |
 |---|---|
 | [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | Restoration weights, input size, structural toggles, training hyperparameters, loss weights, training data paths |
-| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names |
+| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names — which is also what LabelMe class *names* are matched against |
 
 To override part of a config, pass a YAML with only the keys you want changed. It is
 merged recursively.

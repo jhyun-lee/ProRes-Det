@@ -46,10 +46,13 @@ train:
   # These three are globbed as written, so a relative path is read against the
   # working directory, not the project root. Run train.py from the repo root, or
   # give absolute paths. Clearing all three (null) falls back to --data-root.
+  #
+  # This is the training split only. sample_eval and sample_test are held out for
+  # evaluate.py; pointing this at either would score the model on what it fitted.
   data:
-    distorted: "data/sample_input/distorted"
-    surface: "data/sample_input/surface"
-    light: "data/sample_input/light"
+    distorted: "data/SampleData/sample_train/distorted"
+    surface: "data/SampleData/sample_train/surface"
+    light: "data/SampleData/sample_train/light"
 
   epochs: 30
   batch_size: 4

@@ -11,8 +11,17 @@ from datetime import datetime
 
 from .config import PROJECT_ROOT, load_config, pick, resolve_path
 
-DEFAULT_INPUT = "data/sample_input"
-DEFAULT_GT = "data/sample_input"
+# The bundled sample set is split three ways under data/SampleData (see
+# data/README_data.md). demo.py and evaluate.py default to the validation split,
+# because it is the only one that ships both surface/ and labels/ for every scene;
+# train.py defaults to SAMPLE_TRAIN and never touches these two.
+SAMPLE_ROOT = "data/SampleData"
+SAMPLE_TRAIN = f"{SAMPLE_ROOT}/sample_train"
+SAMPLE_EVAL = f"{SAMPLE_ROOT}/sample_eval"
+SAMPLE_TEST = f"{SAMPLE_ROOT}/sample_test"
+
+DEFAULT_INPUT = SAMPLE_EVAL
+DEFAULT_GT = SAMPLE_EVAL
 DEFAULT_LIVE_VIDEO = "data/live/BeamVideo.mp4"
 DEFAULT_LIVE_BG = "data/live/BaseBackGround.jpg"
 DEFAULT_OUTPUT = "output"

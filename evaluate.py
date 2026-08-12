@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Score detection and restoration before vs after, against data/sample_input.
+Score detection and restoration before vs after, against a labelled split.
 
-    python evaluate.py
+    python evaluate.py                                 # data/SampleData/sample_eval
     python evaluate.py --detector ssd --conf 0.3
     python evaluate.py --detector yolo,ssd             # one row per backend
     python evaluate.py --iou 0.75 --output output/eval
+    python evaluate.py --input data/SampleData/sample_test \
+                       --gt    data/SampleData/sample_test   # the held-out split
+
+Both labelled splits live under data/SampleData: sample_eval (22 pairs, YOLO txt
+labels) is the default, sample_test (200 pairs, LabelMe json labels) is held out.
+Either format is read directly, so --gt only ever needs the split root.
 
 Reports, for the distorted image and the restored one:
 
@@ -174,7 +180,7 @@ def evaluate_one(backend, args, out_dir, det_weights):
         raise SystemExit(
             f"no sample has both a surface image and a label under {args.gt}\n"
             f"    expected {args.gt}/surface/surface_<id>.jpg and "
-            f"{args.gt}/labels/surface_<id>.txt")
+            f"{args.gt}/labels/surface_<id>.txt (or .json)")
     print(f"scoring {len(scored)} of {len(samples)} pair(s) that have ground truth")
 
     sc_cap, sc_res = Scorer(class_names), Scorer(class_names)
@@ -257,7 +263,7 @@ def _weights_per_backend(backends, explicit):
 
 
 def _eval_dir_name(input_root):
-    """`data/sample_input` -> `Eval_sample_input`, so a report is named by its dataset."""
+    """`.../sample_eval` -> `Eval_sample_eval`, so a report is named by its dataset."""
     return "Eval_" + os.path.basename(os.path.normpath(str(input_root)))
 
 

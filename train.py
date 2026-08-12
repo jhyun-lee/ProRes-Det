@@ -4,9 +4,13 @@
 Fine-tune the restoration network on projector-distortion triplets.
 
     python train.py --epochs 30
-    python train.py --data-root data/sample_input --epochs 5 --batch-size 2
+    python train.py --data-root data/SampleData/sample_train --epochs 5 --batch-size 2
     python train.py --no-ca                       # ablate channel attention
     python train.py --data-root /path/to/full/dataset --epochs 30
+
+The bundled training split is data/SampleData/sample_train (1,000 pairs over 20
+surfaces). sample_eval and sample_test are held out for evaluate.py and carry the
+detection labels; nothing here reads them.
 
 Loss: L1 + VGG perceptual + (1 - SSIM) + high-frequency Haar, weights from
 configs/restoration.yaml (tuned by an Optuna sweep on this dataset).
@@ -34,7 +38,9 @@ import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
 
-from projector_distortion.cli import add_common_args, resolve_device  # noqa: E402
+from projector_distortion.cli import (  # noqa: E402
+    SAMPLE_TRAIN, add_common_args, resolve_device,
+)
 from projector_distortion.config import load_config, pick, resolve_path  # noqa: E402
 from projector_distortion.data import (  # noqa: E402
     RESEARCH_DIRS, TripletPatchDataset, index_triplets,
@@ -98,7 +104,7 @@ class PerceptualLoss(nn.Module):
             return torch.mean(torch.abs(self.slice(x) - self.slice(y.detach())))
 
 
-DEFAULT_DATA_ROOT = "data/sample_input"
+DEFAULT_DATA_ROOT = SAMPLE_TRAIN
 
 # train.data keys, and the pre-rename spelling each one replaced.
 DATA_KEYS = {"distorted": "pro", "light": "beam", "surface": "clean"}

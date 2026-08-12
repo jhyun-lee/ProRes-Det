@@ -51,7 +51,7 @@ YAML을 넘기면 된다. YOLO 체크포인트가 자체 names를 가지고 있�
 
 | | 기본값 | 변경 |
 |---|---|---|
-| 입력 | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
+| 입력 | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
 | 출력 | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
 
 | 옵션 | 기본값 | 의미 |
@@ -185,9 +185,17 @@ csv는 모든 프레임을 덮고 이미지만 드물게 떨어져서, 디스크
 
 | | 기본값 | 변경 |
 |---|---|---|
-| 입력 | `data/sample_input/` (`distorted/` + `light/`) | `--input <dir>` |
-| GT | `data/sample_input/` (`surface/` + `labels/`) | `--gt <dir>` |
+| 입력 | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
+| GT | `data/SampleData/sample_eval/` (`surface/` + `labels/`) | `--gt <dir>` |
 | 출력 | `output/Eval_<입력 데이터셋>/` | `--output <dir>` · `--name <name>` |
+
+`labels/`에는 YOLO `.txt`나 LabelMe `.json`이 들어갈 수 있고 확장자로 리더가 정해지므로,
+홀드아웃 split은 경로만 주면 된다. LabelMe는 클래스를 *이름*으로 저장하며, 그 이름은 탐지기
+자신의 클래스 목록과 대조된다 — [data/README_data.ko.md](data/README_data.ko.md#라벨-포맷) 참조.
+
+```bash
+python evaluate.py --input data/SampleData/sample_test --gt data/SampleData/sample_test
+```
 
 `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`를 쓴다.
 
@@ -201,15 +209,15 @@ csv는 모든 프레임을 덮고 이미지만 드물게 떨어져서, 디스크
 python evaluate.py --detector yolo,ssd --iou 0.5
 ```
 
-리포트 디렉터리는 입력 데이터셋 이름을 따른다. `data/sample_input`은
-`output/Eval_sample_input/`으로 들어간다. 같은 데이터셋을 다시 돌리면 덮어쓰고, 이전 실행의
-백엔드별 csv는 먼저 정리된다.
+리포트 디렉터리는 입력 데이터셋 이름을 따른다. `data/SampleData/sample_eval`은
+`output/Eval_sample_eval/`로, 테스트 split은 `output/Eval_sample_test/`로 들어간다. 같은
+데이터셋을 다시 돌리면 덮어쓰고, 이전 실행의 백엔드별 csv는 먼저 정리된다.
 
 요약 표가 출력되고, 클래스별 P / R / F1 / AP는 csv에 들어간다.
 
 ```python
 import pandas as pd
-pc = pd.read_csv("output/Eval_sample_input/per_class_yolo.csv")
+pc = pd.read_csv("output/Eval_sample_eval/per_class_yolo.csv")
 pc.pivot_table(index="name", columns="source", values="ap")   # 클래스별 AP 변화
 ```
 
@@ -250,8 +258,12 @@ train:
 결정 순서:
 
 ```
---data-root   >   train.data   >   data/sample_input
+--data-root   >   train.data   >   data/SampleData/sample_train
 ```
+
+`train.data`는 라벨이 없는 유일한 split인 `sample_train`을 가리킨 채로 배포된다 — 학습에는
+라벨이 필요 없기 때문이다. `sample_eval`과 `sample_test`는 `evaluate.py`용 홀드아웃이므로,
+`train.data`를 그쪽으로 돌리면 학습한 데이터로 채점하게 된다.
 
 `--data-root`는 세 역할을 모두 담은 폴더 하나를 가리키며 무조건 이긴다. `collect.py`로 만든
 세션은 이것만 주면 된다. 주지 않으면 설정된 세 디렉터리를 쓰는데, 그 경로들은 그대로
@@ -275,8 +287,8 @@ python train.py --data-root data/collected_0803    # 폴더 하나, 설정은 �
 출력된다.
 
 ```
-data: 10 triplets of 22 distorted image(s) from distorted=data/sample_input/distorted
-      skipped 0 without a light, 12 without a surface
+data: 994 triplets of 1,000 distorted image(s) from distorted=data/SampleData/sample_train/distorted
+      skipped 6 without a light, 0 without a surface
 ```
 
 ### 옵션

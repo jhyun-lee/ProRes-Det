@@ -6,7 +6,7 @@ Filenames tie the views of one moment together (see data/README_data.md):
     distorted  distorted_<surfaceId>_<lightId>.jpg
     light      light_<lightId>.jpg
     surface    surface_<surfaceId>.jpg
-    label      surface_<surfaceId>.txt
+    label      surface_<surfaceId>.txt   (or .json, LabelMe)
 
 `surfaceId` must not contain '_'; `lightId` may. Layouts 'flat' (distorted/ light/
 surface/) and 'research' (ProjectorImage/ BeamImage/ OriginalImage/) are
@@ -14,10 +14,13 @@ auto-detected.
 
 Sessions collected before the rename used pro/ beam/ clean/ and the prefixes
 `projected_` / `output_video_` / `Ori`. Those are still recognised on read so an
-existing dataset keeps working; nothing writes them any more.
+existing dataset keeps working; nothing writes them any more - the bundled
+data/SampleData/sample_train and sample_test still carry that spelling, while
+sample_eval carries the current one.
 """
 
 import glob
+import json
 import os
 import random
 from dataclasses import dataclass
@@ -53,6 +56,10 @@ LAYOUTS = (("flat", FLAT_DIRS), ("legacy-flat", LEGACY_FLAT_DIRS),
 # Where a ground-truth root may keep the surface images, newest first.
 SURFACE_GT_DIRS = (FLAT_DIRS["surface"], RESEARCH_DIRS["surface"],
                    LEGACY_FLAT_DIRS["surface"])
+
+# Annotation formats, in the order a duplicate surfaceId is resolved: YOLO txt first,
+# LabelMe json second. sample_eval ships the former, sample_test the latter.
+LABEL_EXT = (".txt", ".json")
 
 
 def _images_in(directory) -> Dict[str, str]:
@@ -148,8 +155,12 @@ def find_samples(input_root, gt_root=None, limit=0) -> List[Sample]:
                          for k, v in _images_in(surface_dir).items()}
         labels_dir = os.path.join(gt_root, "labels")
         if os.path.isdir(labels_dir):
-            label_by_id = {surface_id(f): os.path.join(labels_dir, f)
-                           for f in os.listdir(labels_dir) if f.endswith(".txt")}
+            # Reversed so the earlier extension in LABEL_EXT overwrites the later one,
+            # and one surfaceId annotated in both formats resolves to the YOLO txt.
+            for ext in reversed(LABEL_EXT):
+                label_by_id.update({surface_id(f): os.path.join(labels_dir, f)
+                                    for f in sorted(os.listdir(labels_dir))
+                                    if f.endswith(ext)})
 
     samples, skipped = [], []
     for fname, distorted_path in distorted_files.items():
@@ -257,9 +268,17 @@ def index_triplets(root=None, surface_root=None, sample=0, seed=42,
     return triplets
 
 
-def load_yolo_labels(path, img_w, img_h) -> List[Tuple[int, Tuple[int, int, int, int]]]:
+Boxes = List[Tuple[int, Tuple[int, int, int, int]]]
+
+
+def _clip_box(x1, y1, x2, y2, img_w, img_h) -> Tuple[int, int, int, int]:
+    return (max(0, int(round(x1))), max(0, int(round(y1))),
+            min(img_w, int(round(x2))), min(img_h, int(round(y2))))
+
+
+def load_yolo_labels(path, img_w, img_h) -> Boxes:
     """YOLO txt (`cls cx cy w h`, normalised) -> [(cls_id, (x1,y1,x2,y2)), ...] pixels."""
-    out = []
+    out: Boxes = []
     if not path or not os.path.exists(path):
         return out
     with open(path, encoding="utf-8") as f:
@@ -269,12 +288,62 @@ def load_yolo_labels(path, img_w, img_h) -> List[Tuple[int, Tuple[int, int, int,
                 continue
             cls_id = int(float(parts[0]))
             cx, cy, bw, bh = (float(v) for v in parts[1:5])
-            x1 = int(round((cx - bw / 2) * img_w))
-            y1 = int(round((cy - bh / 2) * img_h))
-            x2 = int(round((cx + bw / 2) * img_w))
-            y2 = int(round((cy + bh / 2) * img_h))
-            out.append((cls_id, (max(0, x1), max(0, y1), min(img_w, x2), min(img_h, y2))))
+            out.append((cls_id, _clip_box((cx - bw / 2) * img_w, (cy - bh / 2) * img_h,
+                                          (cx + bw / 2) * img_w, (cy + bh / 2) * img_h,
+                                          img_w, img_h)))
     return out
+
+
+def load_labelme_labels(path, img_w, img_h, class_names=None) -> Boxes:
+    """
+    LabelMe json (`shapes[].points`, absolute pixels) -> the same box list.
+
+    Points are read against the `imageWidth`/`imageHeight` the annotation was made at
+    and rescaled to (img_w, img_h), so an annotation survives the pipeline running at
+    a different input_size. Class *names* are what LabelMe stores, so they are mapped
+    through `class_names` - which is the detector's own list, keeping the ground truth
+    and the predictions on one set of ids. A name outside that list is skipped: scoring
+    a class the detector cannot emit would only ever count as a false negative.
+    """
+    out: Boxes = []
+    if not path or not os.path.exists(path):
+        return out
+    if not class_names:
+        from .models.detection import CLASS_NAMES
+        class_names = CLASS_NAMES
+    ids = {str(n): i for i, n in enumerate(class_names)}
+
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    sx = img_w / float(doc.get("imageWidth") or img_w)
+    sy = img_h / float(doc.get("imageHeight") or img_h)
+
+    unknown = set()
+    for shape in doc.get("shapes") or []:
+        if shape.get("shape_type") != "rectangle":
+            continue
+        points = shape.get("points") or []
+        if len(points) < 2:
+            continue
+        cls_id = ids.get(str(shape.get("label")))
+        if cls_id is None:
+            unknown.add(str(shape.get("label")))
+            continue
+        (ax, ay), (bx, by) = points[0][:2], points[1][:2]
+        out.append((cls_id, _clip_box(min(ax, bx) * sx, min(ay, by) * sy,
+                                      max(ax, bx) * sx, max(ay, by) * sy,
+                                      img_w, img_h)))
+    if unknown:
+        print(f"warning: {os.path.basename(path)} has label(s) the detector does not "
+              f"know, skipped: {', '.join(sorted(unknown))}")
+    return out
+
+
+def load_labels(path, img_w, img_h, class_names=None) -> Boxes:
+    """Ground-truth boxes from a label file, dispatched on its extension."""
+    if path and str(path).lower().endswith(".json"):
+        return load_labelme_labels(path, img_w, img_h, class_names)
+    return load_yolo_labels(path, img_w, img_h)
 
 
 class TripletPatchDataset:

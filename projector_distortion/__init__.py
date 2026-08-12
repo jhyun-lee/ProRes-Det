@@ -9,7 +9,7 @@ before and after restoration.
     restorer = build_restorer("naf_se_unet", "weights/restorer_nafse_unet.pt")
     detector = build_detector("ssd", "weights/detector_ssdlite.pth")
     # distorted/ light/ + surface/ labels/ for scoring
-    root = "data/sample_input"
+    root = "data/SampleData/sample_eval"
     for i, s in enumerate(find_samples(root, root)):
         r = process_sample(s, restorer, detector, frame_id=i)
         print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))

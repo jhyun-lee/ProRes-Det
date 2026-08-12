@@ -10,10 +10,11 @@ import cv2
 import numpy as np
 import pytest
 
-from conftest import RESTORER_W, SAMPLE_INPUT, SSD_W, needs_restorer, \
-    needs_samples, needs_ssd
+from conftest import RESTORER_W, SAMPLE_EVAL, SAMPLE_INPUT, SAMPLE_TEST, \
+    SAMPLE_TRAIN, SSD_W, needs_restorer, needs_samples, needs_ssd, \
+    needs_test_split, needs_train_split
 from projector_distortion.data import (
-    find_samples, light_id, load_yolo_labels, resolve_dirs, surface_id,
+    find_samples, light_id, load_labels, load_yolo_labels, resolve_dirs, surface_id,
 )
 from projector_distortion.utils.image import iou, psnr, resize, ssim
 from projector_distortion.utils.recording import FRAME_KINDS, RunRecorder, parse_kinds
@@ -90,6 +91,72 @@ def test_labels_land_inside_the_image():
 
 def test_missing_label_file_is_not_an_error():
     assert load_yolo_labels("no/such.txt", 100, 100) == []
+    assert load_labels("no/such.json", 100, 100) == []
+
+
+# --- the three splits under data/SampleData -----------------------------------
+
+@needs_train_split
+@needs_test_split
+@needs_samples
+def test_every_split_resolves_a_layout():
+    """
+    sample_train / sample_test carry the pre-rename filenames, sample_eval the
+    current ones. All three must pair without any per-split handling.
+    """
+    for root in (SAMPLE_TRAIN, SAMPLE_EVAL, SAMPLE_TEST):
+        layout, dirs = resolve_dirs(root)
+        assert layout == "flat", root
+        assert os.path.isdir(dirs["surface"]), root
+
+
+@needs_train_split
+def test_train_split_indexes_triplets():
+    from projector_distortion.data import index_triplets
+    triplets = index_triplets(SAMPLE_TRAIN)
+    assert len(triplets) > 900, "the training split should pair nearly all 1,000 pairs"
+    for distorted, surface, light in triplets[:5]:
+        assert surface_id(distorted) == surface_id(surface)
+        assert light_id(distorted) == light_id(light)
+
+
+@needs_train_split
+def test_train_split_has_no_detection_labels():
+    """Training only ever fits restoration, so the split ships no labels/ at all."""
+    assert not os.path.isdir(os.path.join(SAMPLE_TRAIN, "labels"))
+
+
+@needs_test_split
+def test_labelme_labels_are_read_from_the_test_split():
+    samples = find_samples(SAMPLE_TEST, gt_root=SAMPLE_TEST)
+    labelled = [s for s in samples if s.label]
+    assert labelled, "no detection labels found in the test split"
+    assert labelled[0].label.endswith(".json")
+
+    boxes = load_labels(labelled[0].label, 640, 360)
+    assert boxes, "LabelMe file parsed to nothing"
+    for cls_id, (x1, y1, x2, y2) in boxes:
+        assert 0 <= cls_id <= 16
+        assert 0 <= x1 < x2 <= 640
+        assert 0 <= y1 < y2 <= 360
+
+
+def test_labelme_points_rescale_to_the_requested_size():
+    """The annotation's own imageWidth/Height is what the points are read against."""
+    doc = {"imageWidth": 640, "imageHeight": 360, "shapes": [
+        {"label": "Apple", "shape_type": "rectangle",
+         "points": [[320.0, 180.0], [160.0, 90.0]]},          # deliberately unordered
+        {"label": "NotAClass", "shape_type": "rectangle",
+         "points": [[0.0, 0.0], [10.0, 10.0]]},
+        {"label": "Apple", "shape_type": "polygon", "points": [[0, 0], [1, 1], [2, 2]]},
+    ]}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "surface_0409001429.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        boxes = load_labels(path, 320, 180, class_names=["Apple", "BlueBerry"])
+
+    assert boxes == [(0, (80, 45, 160, 90))], "unknown labels and polygons are skipped"
 
 
 # --- metrics ------------------------------------------------------------------
@@ -268,7 +335,7 @@ def test_distorted_without_a_surface_is_skipped_not_fatal(bgr_image):
 
 def test_eval_dir_is_named_after_the_input_dataset():
     import evaluate
-    assert evaluate._eval_dir_name("data/sample_input") == "Eval_sample_input"
+    assert evaluate._eval_dir_name("data/SampleData/sample_eval") == "Eval_sample_eval"
     assert evaluate._eval_dir_name("data/live_20260803_161234/") == \
         "Eval_live_20260803_161234"
 

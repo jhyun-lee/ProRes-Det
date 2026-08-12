@@ -7,6 +7,7 @@ Script options for `demo.py` / `evaluate.py` / `train.py` are in
 [README_running.md](../README_running.md).
 
 - [What ships](#what-ships)
+- [The three splits](#the-three-splits)
 - [Filename convention](#filename-convention)
 - [Layouts](#layouts)
 - [Label format](#label-format)
@@ -18,43 +19,84 @@ Script options for `demo.py` / `evaluate.py` / `train.py` are in
 
 ## What ships
 
-A toy dataset that runs out of the box. It is tracked in git, so it is there right after a
-clone.
+A dataset that runs out of the box, split three ways under `SampleData/`. It is tracked in
+git, so it is there right after a clone.
 
 ```
 data/
 ├── collect.py              build your own dataset with a projector and a webcam
 ├── record.py               project a clip and record the camera's view (no models)
-├── sample_input/           input *and* ground truth for demo / evaluate / train
-│   ├── distorted/ distorted_<surfaceId>_<lightId>.jpg  22 files, 640×360
-│   ├── light/     light_<lightId>.jpg                  22 files, 1280×720 and 854×480
-│   ├── surface/   surface_<surfaceId>.jpg              10 files, 640×360
-│   └── labels/    surface_<surfaceId>.txt              10 files, 107 boxes
+├── SampleData/             the dataset, split for train / validation / test
+│   ├── sample_train/       what train.py fits on          180 MiB
+│   │   ├── distorted/  1,000 files, 640×360
+│   │   ├── light/        990 files, 1280×720 · 854×480 · 856×480
+│   │   └── surface/       20 files, 640×360     — no labels/, training needs none
+│   ├── sample_eval/        what demo.py and evaluate.py default to   4.2 MiB
+│   │   ├── distorted/     22 files, 640×360
+│   │   ├── light/         22 files, 1280×720 and 854×480
+│   │   ├── surface/       10 files, 640×360
+│   │   └── labels/        10 files, YOLO txt, 107 boxes
+│   ├── sample_test/        held out; only evaluate.py --input reaches it   44 MiB
+│   │   ├── distorted/    200 files, 640×360
+│   │   ├── light/        198 files, 854×480
+│   │   ├── surface/        5 files, 640×360
+│   │   └── labels/         7 files, LabelMe json, 53 boxes over those 5 scenes
+│   └── sample_video/       two short clips, an alternative to BeamVideo    23 MiB
+│                           4,262 and 5,381 frames @30fps, 854×480 / 856×480
 ├── live/                   input for demo.py --live and record.py
 │   ├── BeamVideo.mp4       clip to play through the projector
 │   │                       5,858 frames @30fps = 3.3 min, 854×480, 55 MiB
 │   └── BaseBackGround.jpg  background shown during calibration, 1280×960
-├── sample_video/           two short clips, an alternative to BeamVideo
-│                           4,262 and 5,381 frames @30fps, 854×480 / 856×480, 23 MiB
 └── recordings/             where record.py writes (git-ignored)
 ```
 
 | Path | Used as |
 |---|---|
-| `sample_input/distorted/` | Model input ch 0:3 — the camera's view of the projected screen |
-| `sample_input/light/` | Model input ch 3:6 — the frame the projector emitted |
-| `sample_input/surface/` | Training target, and the PSNR/SSIM reference |
-| `sample_input/labels/` | The mAP reference, YOLO format |
+| `<split>/distorted/` | Model input ch 0:3 — the camera's view of the projected screen |
+| `<split>/light/` | Model input ch 3:6 — the frame the projector emitted |
+| `<split>/surface/` | Training target, and the PSNR/SSIM reference |
+| `<split>/labels/` | The mAP reference — YOLO txt or LabelMe json |
 
-`surface/` and `labels/` sit inside `sample_input/`, so `--input` and `--gt` take the same
-path. Both are optional. Without them a run still works, it just cannot be scored.
+Every split is self-contained: `surface/` and `labels/` sit beside `distorted/`, so
+`--input` and `--gt` take the same path. Both are optional. Without them a run still works,
+it just cannot be scored.
 
 Image sizes need not match. Everything is resized to the model's `input_size` (640×360 by
-default), which is why `light/` mixes 1280×720 and 854×480 with no special handling.
+default), which is why `light/` mixes 1280×720, 854×480 and 856×480 with no special
+handling.
 
-`data/` is 81 MiB tracked, almost all of it video — `live/BeamVideo.mp4` (55 MiB) and
-`sample_video/` (23 MiB). The dataset proper is 4.2 MiB. Delete the clips if you never use
-`--live` or `record.py`.
+`data/` is 305 MiB tracked. `live/BeamVideo.mp4` (55 MiB) and `SampleData/sample_video/`
+(23 MiB) are only needed by `--live` and `record.py`; delete them if you use neither.
+
+---
+
+## The three splits
+
+The scenes do not overlap. No `surfaceId` in `sample_train` appears in `sample_eval` or
+`sample_test`, so a checkpoint trained on the first is scored on scenes it has never seen.
+
+| Split | Pairs | Scenes | Labels | Read by |
+|---|---|---|---|---|
+| `sample_train` | 1,000 (994 pair a light) | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../projector_distortion/configs/restoration.yaml) |
+| `sample_eval` | 22 | 10 | YOLO txt, 107 boxes | `demo.py` and `evaluate.py` — the default for both |
+| `sample_test` | 200 | 5 | LabelMe json, 53 boxes | nothing by default; pass `--input`/`--gt` |
+
+```bash
+python train.py                                          # sample_train
+python evaluate.py                                       # sample_eval
+python evaluate.py --input data/SampleData/sample_test \
+                   --gt    data/SampleData/sample_test   # sample_test
+```
+
+Two notes on the counts. Six `sample_train` captures reference a light frame the split does
+not carry; they are skipped with a warning and 994 triplets remain. `sample_test/labels/`
+holds two extra annotations (`Ori0428095917`, `Ori0531135441`) whose scenes have no
+`surface`/`distorted` in the split — unmatched labels are simply never loaded, which is why
+the box count is 53 and not 80.
+
+`sample_train` and `sample_test` were collected before the filename rename, so they carry
+the `projected_` / `output_video_` / `Ori` spelling; `sample_eval` carries the current
+`distorted_` / `light_` / `surface_` one. Both are read the same way — see below.
 
 ---
 
@@ -68,27 +110,29 @@ distorted_0409001429_0404023332_294_75.jpg
           └───┬────┘ └──────┬───────┘
            surfaceId      lightId
 
-  → sample_input/surface/surface_0409001429.jpg          (ground truth screen)
-  → sample_input/labels/surface_0409001429.txt           (detection ground truth)
-  → sample_input/light/light_0404023332_294_75.jpg       (frame the projector emitted)
+  → sample_eval/surface/surface_0409001429.jpg           (ground truth screen)
+  → sample_eval/labels/surface_0409001429.txt            (detection ground truth)
+  → sample_eval/light/light_0404023332_294_75.jpg        (frame the projector emitted)
 ```
 
-| Role | Filename | In the model |
-|---|---|---|
-| `distorted` | `distorted_<surfaceId>_<lightId>.jpg` | input ch 0:3 |
-| `light` | `light_<lightId>.jpg` | input ch 3:6 |
-| `surface` | `surface_<surfaceId>.jpg` | training target / PSNR·SSIM reference |
-| `label` | `surface_<surfaceId>.txt` | detection mAP reference |
+| Role | Filename | Pre-rename spelling | In the model |
+|---|---|---|---|
+| `distorted` | `distorted_<surfaceId>_<lightId>.jpg` | `projected_…` | input ch 0:3 |
+| `light` | `light_<lightId>.jpg` | `output_video_…` | input ch 3:6 |
+| `surface` | `surface_<surfaceId>.jpg` | `Ori<surfaceId>.jpg` | training target / PSNR·SSIM reference |
+| `label` | `surface_<surfaceId>.txt` or `.json` | `Ori<surfaceId>.…` | detection mAP reference |
 
 - No `_` in `surfaceId`. Everything up to the first `_` is taken as the surfaceId.
 - `lightId` may contain `_`. Above it is `0404023332_294_75`.
-- One `surface` backing several `distorted` captures is normal. Here 10 surface images
-  back 22 `distorted` files, 1–3 each.
+- One `surface` backing several `distorted` captures is normal. In `sample_eval` 10 surface
+  images back 22 `distorted` files, 1–3 each; in `sample_test` 5 back 200.
 - `light` is 1:1 with `distorted`.
 - Recognised extensions: `.jpg` `.jpeg` `.png` `.bmp`.
 - A `distorted` with no matching `light` is skipped with a warning. The run does not fail.
 - `surface` and `label` are optional. A missing `surface` only drops PSNR/SSIM, and
   `evaluate.py` scores just the samples that have both.
+- The pre-rename column is read but never written. It is what `sample_train` and
+  `sample_test` carry, and what an already-collected session keeps working under.
 
 ---
 
@@ -103,7 +147,7 @@ Auto-detected, by which folder exists.
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/sample_input                          # flat
+python demo.py --input data/SampleData/sample_eval                # flat
 python demo.py --input /path/to/WarpData_0520                     # research
 ```
 
@@ -114,7 +158,12 @@ Images sitting loose in one folder are handled as `mixed`, split by the `distort
 
 ## Label format
 
-Standard YOLO. One line per box, `<cls_id> <cx> <cy> <w> <h>`, all normalised to 0–1.
+Two are read, picked by the file's extension. Both end up as the same pixel boxes, so a
+split may use either and `--gt` never needs telling which.
+
+### YOLO `.txt` — `sample_eval`
+
+One line per box, `<cls_id> <cx> <cy> <w> <h>`, all normalised to 0–1.
 
 ```
 0 0.139406 0.263969 0.122381 0.207129
@@ -124,8 +173,34 @@ Standard YOLO. One line per box, `<cls_id> <cx> <cy> <w> <h>`, all normalised to
 
 `cls_id` runs `0..16` and follows the `names` order in
 [configs/detection.yaml](../projector_distortion/configs/detection.yaml) — 11 fruits
-(Apple … Watermelon), then 6 animals (Cat … Snake). All 17 classes appear in the bundled
-labels.
+(Apple … Watermelon), then 6 animals (Cat … Snake). All 17 classes appear in
+`sample_eval`'s labels.
+
+### LabelMe `.json` — `sample_test`
+
+What the LabelMe annotator writes, unmodified. Boxes are `rectangle` shapes with two
+corner points in **absolute pixels**, and the class is a *name*, not an id.
+
+```json
+{
+  "imageWidth": 640, "imageHeight": 360,
+  "shapes": [
+    {"label": "BlueBerry", "shape_type": "rectangle",
+     "points": [[63.64, 27.97], [144.56, 105.43]]}
+  ]
+}
+```
+
+- Points are read against the file's own `imageWidth`/`imageHeight` and rescaled to
+  whatever `input_size` the run uses, so re-running at 480×270 needs no re-annotation.
+- The corners are ordered on read, so a box drawn bottom-right to top-left is fine.
+- `label` is matched against the detector's own class names — the YOLO checkpoint's list,
+  or `names` from `detection.yaml` for SSD. A name outside that list is skipped with a
+  warning: scoring a class the detector cannot emit would only ever count as a false
+  negative.
+- Only `rectangle` shapes are used. Polygons and points are ignored.
+
+If both `surface_<id>.txt` and `surface_<id>.json` exist for one scene, the `.txt` wins.
 
 ---
 
@@ -250,8 +325,9 @@ together.
 
 ### Labels are not collected
 
-`surface/` has to be annotated by hand into `<session>/labels/surface_<surfaceId>.txt`
-before `evaluate.py` can score mAP. Restoration training and PSNR/SSIM need no labels.
+`surface/` has to be annotated by hand into `<session>/labels/surface_<surfaceId>.txt` — or
+`.json`, if you annotate in LabelMe — before `evaluate.py` can score mAP. Restoration
+training and PSNR/SSIM need no labels, which is why `sample_train` ships without any.
 
 ---
 
@@ -291,7 +367,7 @@ Camera flags are the same as `collect.py`'s.
 
 ```bash
 python data/record.py --screen 2 --seconds 30
-python data/record.py --clip data/sample_video/mIni_Video_1.mp4 --loop
+python data/record.py --clip data/SampleData/sample_video/mIni_Video_1.mp4 --loop
 python data/record.py --warp --rec-size 640 360
 ```
 
@@ -311,13 +387,17 @@ used, plus the measured rate and how many frames the encoder dropped.
 ## Swapping in real data
 
 ```bash
-# 1) fill the same structure, then just run
+# 1) fill the same structure under data/SampleData/, then just run
 python demo.py
 python evaluate.py
 
 # 2) or point at the original dataset directly
 python demo.py --input /mnt/.../WarpData_0520
 ```
+
+Nothing hard-codes a split name. `--input`/`--gt` and `--data-root` take any folder in a
+recognised layout, so a real dataset can keep its own directory names and split however it
+likes; `data/SampleData/` is only where the bundled one happens to sit.
 
 Training reads its three directories from `train.data` in
 [configs/restoration.yaml](../projector_distortion/configs/restoration.yaml). Each takes a

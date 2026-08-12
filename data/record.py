@@ -10,7 +10,7 @@ before there are weights to run, or for proving a rig works end to end.
 
     python data/record.py                        # BeamVideo -> data/recordings/rec_<t>.mp4
     python data/record.py --screen 2 --seconds 30
-    python data/record.py --clip data/sample_video/mIni_Video_1.mp4 --loop
+    python data/record.py --clip data/SampleData/sample_video/mIni_Video_1.mp4 --loop
     python data/record.py --warp                 # record rectified frames, not raw ones
 
 Recording starts as soon as the window is up - no keypress. 'q' in the preview or
