@@ -1,9 +1,9 @@
 """
 YAML config loading and precedence.
 
-Lowest to highest: bundled configs/*.yaml -> a file passed via --config -> CLI flags.
-Paths inside a config resolve against the project root, not the working directory,
-so `python demo.py` works from anywhere.
+configs/*.yaml holds the settings, and the handful of CLI flags that remain override
+it. Paths inside a config resolve against the project root, not the working
+directory, so `python demo.py` works from anywhere.
 """
 
 import os
@@ -23,25 +23,9 @@ def load_yaml(path) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def deep_merge(base: Dict, override: Dict) -> Dict:
-    """Recursive dict merge; `override` wins. Neither input is mutated."""
-    out = dict(base)
-    for k, v in (override or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = deep_merge(out[k], v)
-        else:
-            out[k] = v
-    return out
-
-
-def load_config(name: str, extra: Optional[str] = None) -> Dict[str, Any]:
-    """Load `configs/<name>.yaml` ('restoration' | 'detection'), then merge `extra`."""
-    cfg = load_yaml(os.path.join(CONFIG_DIR, f"{name}.yaml"))
-    if extra:
-        if not os.path.exists(extra):
-            raise FileNotFoundError(f"config not found: {extra}")
-        cfg = deep_merge(cfg, load_yaml(extra))
-    return cfg
+def load_config(name: str) -> Dict[str, Any]:
+    """Load `configs/<name>.yaml` ('restoration' | 'detection')."""
+    return load_yaml(os.path.join(CONFIG_DIR, f"{name}.yaml"))
 
 
 def resolve_path(path, root: Optional[str] = None) -> Optional[str]:

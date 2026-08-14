@@ -2,35 +2,41 @@
 #
 # `ablation` mirrors RestorationConfig. Leaving every flag true reproduces the
 # reference architecture exactly, which is what the shipped weights were trained as.
-# CLI flags (--no-ca, --base-dim, ...) override anything set here.
+# This file is the only place the architecture is configured - there is no CLI flag
+# per field, because a checkpoint carries the config it was trained with and
+# inference rebuilds from that. Edit here, then `python train.py`.
 
 model:
-  # Which restoration backend runs. Any name registered with @register_restorer;
-  # --restorer overrides it. Swapping this is the whole change - the pipeline,
-  # recording and evaluation code never learn which backend they are talking to.
+  # Which restoration backend runs. Any name registered with @register_restorer.
+  # Swapping this is the whole change - the pipeline, recording and evaluation code
+  # never learn which backend they are talking to.
   backend: naf_se_unet
   weights: weights/restorer_nafse_unet.pt
   # Network input, (width, height). Fully convolutional, so this can differ from the
-  # 320x180 training patch without retraining.
+  # 320x180 training patch without retraining. Smaller is faster and costs
+  # restoration quality, not detection, down to about 480x270.
   input_size: [640, 360]
 
+# Turning one of these off and retraining measures that component's contribution.
+# The run directory and the checkpoint filename get a tag naming what was ablated
+# (e.g. `NoCA-NoSkip3`), so a variant stays identifiable from its path alone.
 ablation:
   # NAFSEBlock internals
-  use_prenorm: true
-  use_naf_norm: true
-  use_simple_gate: true
-  use_naf_scale: true
-  use_ca: true
+  use_prenorm: true         # false: drop the pre-LayerNorm of NAFSEBlock
+  use_naf_norm: true        # false: drop LayerNorm2d inside NAFBlock
+  use_simple_gate: true     # false: GELU instead of SimpleGate (no channel halving)
+  use_naf_scale: true       # false: drop the learnable residual scales beta / gamma
+  use_ca: true              # false: no channel attention; a plain NAFBlock
   # U-Net skeleton
-  use_skip1: true
-  use_skip2: true
-  use_skip3: true
-  use_bottleneck: true
-  use_tanh: true
+  use_skip1: true           # false: no skip enc1 -> dec1 (full resolution)
+  use_skip2: true           # false: no skip enc2 -> dec2 (1/2 resolution)
+  use_skip3: true           # false: no skip enc3 -> dec3 (1/4 resolution)
+  use_bottleneck: true      # false: the 1/8-resolution bottleneck becomes Identity
+  use_tanh: true            # false: no output tanh (unbounded residual)
   # capacity
   base_dim: 48
-  enc_depth: [2, 2, 3]
-  dec_depth: [2, 2, 2]
+  enc_depth: [2, 2, 3]      # exactly 3 levels
+  dec_depth: [2, 2, 2]      # exactly 3 levels
   bottleneck_depth: 2
   dw_expand: 2
   ffn_expand: 2

@@ -17,7 +17,7 @@ from projector_distortion.data import (
     find_samples, light_id, load_labels, load_yolo_labels, resolve_dirs, surface_id,
 )
 from projector_distortion.utils.image import iou, psnr, resize, ssim
-from projector_distortion.utils.recording import FRAME_KINDS, RunRecorder, parse_kinds
+from projector_distortion.utils.recording import FRAME_KINDS, RunRecorder
 
 
 # --- filename convention ------------------------------------------------------
@@ -201,12 +201,6 @@ def test_derived_views_are_not_written_as_separate_files():
         assert gone not in FRAME_KINDS
 
 
-def test_parse_kinds_validates():
-    assert parse_kinds("restored,panel") == ("restored", "panel")
-    with pytest.raises(ValueError, match="unknown image kinds"):
-        parse_kinds("restored,nope")
-
-
 def _fake_result(frame_id=0, n_boxes=1):
     from projector_distortion.models import Detection
     from projector_distortion.pipeline.offline import FrameResult
@@ -260,6 +254,94 @@ def test_demo_does_not_write_a_metrics_csv():
             rec.finish()
         assert not os.path.exists(os.path.join(tmp, "frames.csv"))
         assert os.path.exists(os.path.join(tmp, "detections.csv"))
+
+
+# --- calibration review -------------------------------------------------------
+
+GOOD_QUAD = np.float32([[100, 60], [540, 60], [540, 420], [100, 420]])
+OTHER_QUAD = np.float32([[120, 80], [520, 80], [520, 400], [120, 400]])
+
+
+class _FakeCam:
+    """Always hands back the same frame, so a review loop can run with no rig."""
+
+    def __init__(self, shape=(480, 640, 3)):
+        self.frame = np.full(shape, 40, np.uint8)
+
+    def read(self):
+        return True, self.frame.copy()
+
+
+def _review(monkeypatch, keys, points=GOOD_QUAD, manual=None, auto=None):
+    """Drive review_calibration through a scripted list of keypresses."""
+    from projector_distortion.pipeline import live
+
+    pressed = iter(keys)
+
+    def fake_wait(delay=0):
+        # Only the blocking wait is a prompt; the waitKey(1) calls that flush the
+        # projector window must not eat a scripted keypress.
+        return next(pressed) if delay == 0 else 0
+
+    monkeypatch.setattr(live.cv2, "imshow", lambda *a, **k: None)
+    monkeypatch.setattr(live.cv2, "destroyWindow", lambda *a, **k: None)
+    monkeypatch.setattr(live.cv2, "waitKey", fake_wait)
+    monkeypatch.setattr(live, "manual_calibrate",
+                        lambda cam, **k: manual() if callable(manual) else manual)
+    monkeypatch.setattr(live, "auto_calibrate",
+                        lambda *a, **k: auto() if callable(auto) else auto)
+    return live.review_calibration(_FakeCam(), np.zeros((720, 1280, 3), np.uint8),
+                                   points, "auto", (640, 360), {})
+
+
+def test_review_accepts_the_detected_warp(monkeypatch):
+    """enter/space/'a' takes the quad as it stands."""
+    for key in (13, 32, ord("a")):
+        got = _review(monkeypatch, [key])
+        assert got is not None, f"key {key} should accept"
+        points, mode = got
+        assert np.allclose(points, GOOD_QUAD) and mode == "auto"
+
+
+def test_review_quit_aborts_the_run(monkeypatch):
+    """'q' returns None, which run_live turns into 'calibration aborted'."""
+    assert _review(monkeypatch, [ord("q")]) is None
+
+
+def test_review_manual_replaces_the_corners(monkeypatch):
+    """'m' clicks new corners, and the next accept keeps those."""
+    points, mode = _review(monkeypatch, [ord("m"), ord("a")], manual=OTHER_QUAD)
+    assert np.allclose(points, OTHER_QUAD)
+    assert mode == "manual", "a hand-clicked quad must not still claim to be auto"
+
+
+def test_review_redetect_runs_calibration_again(monkeypatch):
+    """'r' re-flashes and takes whatever the new detection found."""
+    points, mode = _review(monkeypatch, [ord("r"), ord("a")], auto=OTHER_QUAD)
+    assert np.allclose(points, OTHER_QUAD) and mode == "auto"
+
+
+def test_review_survives_a_degenerate_quad_instead_of_crashing(monkeypatch):
+    """
+    A collapsed quad reaches warp_size, which rejects it.
+
+    Without the guard that is an unhandled ValueError out of the review loop, i.e. a
+    traceback at exactly the moment the operator was about to fix the problem.
+    """
+    flat = np.float32([[10, 10], [10, 10], [10, 10], [10, 10]])
+    points, _ = _review(monkeypatch, [ord("m"), ord("a")], points=flat,
+                        manual=OTHER_QUAD)
+    assert np.allclose(points, OTHER_QUAD)
+
+
+def test_review_with_nothing_to_show_cannot_be_accepted(monkeypatch):
+    """
+    Auto-detection failed, so there is no preview and 'a' must not commit anything.
+
+    Accepting a None quad would take the run straight into homography() with no
+    corners.
+    """
+    assert _review(monkeypatch, [ord("a"), ord("q")], points=None) is None
 
 
 def test_live_analyses_an_evenly_spaced_subset():
@@ -485,7 +567,6 @@ def test_demo_parser_defaults_are_coherent():
     import demo
     args = demo.build_parser().parse_args([])
     assert args.save_every == 1 and args.live is False
-    assert parse_kinds(args.save_kinds) == FRAME_KINDS
 
 
 def test_cuda_requirements_pin_matched_torch_torchvision_pairs():
@@ -549,17 +630,16 @@ def test_device_note_names_the_gpu_when_there_is_one():
     assert torch.cuda.get_device_name(0) in device_note("cuda")
 
 
-def test_evaluate_parser_accepts_multiple_backends():
-    import evaluate
-    args = evaluate.build_parser().parse_args(["--detector", "yolo,ssd", "--iou", "0.75"])
-    assert args.detector == "yolo,ssd" and args.iou == 0.75
+def test_detector_backend_takes_one_name_or_a_list():
+    """`backend: [yolo, ssd]` is what gives evaluate.py one row per backend."""
+    from projector_distortion.cli import detector_backends
 
-
-def test_demo_rejects_an_unknown_save_kind():
-    import demo
-    args = demo.build_parser().parse_args(["--save-kinds", "restored,bogus"])
-    with pytest.raises(ValueError):
-        parse_kinds(args.save_kinds)
+    assert detector_backends({"detector": {"backend": "yolo"}}) == ["yolo"]
+    assert detector_backends({"detector": {"backend": ["yolo", "ssd"]}}) == \
+        ["yolo", "ssd"]
+    assert detector_backends({}) == ["yolo"], "the default has to survive an empty cfg"
+    with pytest.raises(SystemExit, match="detector.backend is empty"):
+        detector_backends({"detector": {"backend": []}})
 
 
 def test_average_precision_is_sane():
@@ -671,17 +751,15 @@ def test_live_worker_reports_a_result_it_could_not_hand_back():
 @needs_restorer
 def test_an_unknown_backend_is_named_as_such_not_blamed_on_its_weights():
     """
-    `--detector` is validated against the registry, and before the weights lookup.
+    `detector.backend` is validated against the registry, and before the weights lookup.
 
     An unrecognised backend has no `weights:` entry either, so checking the
     checkpoint first reported a missing file for a merely misspelled name.
     """
-    import demo
     from projector_distortion.cli import build_models
 
-    args = demo.build_parser().parse_args(["--detector", "bogus"])
     with pytest.raises(SystemExit) as e:
-        build_models(args, need_detector=True)
+        build_models(need_detector=True, detector_backend="bogus")
     message = str(e.value)
     assert "unknown detector 'bogus'" in message
     assert "yolo" in message, "the message has to list what is available"

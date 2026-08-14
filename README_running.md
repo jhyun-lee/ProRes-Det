@@ -3,8 +3,8 @@
 Options, input and output for the three root entry points. For install and the
 one-liners that just work, see [README.md](README.md).
 
-`collect.py` and `record.py` live under `data/` and are documented in
-[data/README_data.md](data/README_data.md).
+Dataset collection is `Data.py` at the repo root, which dispatches to the scripts under
+`data/`; it is documented in [data/README_data.md](data/README_data.md).
 
 - [Shared flags](#shared-flags)
 - [`demo.py` — restore → detect](#demopy--restore--detect)
@@ -16,34 +16,37 @@ one-liners that just work, see [README.md](README.md).
 
 ---
 
-## Shared flags
+## What the config files own
 
-All three scripts understand these. Full list: `python <script>.py --help`.
+**No flag names a model.** Which restorer runs, which detector runs, which checkpoints
+they load and at what confidence — all of it is read from
+`projector_distortion/configs/*.yaml`. Those settings each had a flag once; none of
+them was what actually changed between two runs, and together they made `--help`
+unreadable.
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--restorer <name>` | `naf_se_unet` | Restoration backend; any name registered with `@register_restorer` |
-| `--restorer-weights <path>` | from `restoration.yaml` | Restoration checkpoint |
-| `--device cuda\|cpu` | cuda if present | — |
-| `--input-size W H` | `640 360` | What the restorer runs at |
-| `--restoration-config <yaml>` | — | Merged over `configs/restoration.yaml` |
-| `--detection-config <yaml>` | — | Merged over `configs/detection.yaml` |
+| Setting | Where |
+|---|---|
+| Live rig: monitor, webcam, projector→camera latency | `rig:` in `live.yaml` |
+| Collection rig, session folders, warp geometry | `collect.yaml` — read by `Data.py`, not by these three |
+| Restoration backend | `model.backend` in `restoration.yaml` |
+| Restoration checkpoint | `model.weights` in `restoration.yaml` |
+| What the restorer runs at | `model.input_size` in `restoration.yaml` |
+| Architecture / ablation / capacity | `ablation:` in `restoration.yaml` — see [Ablation](#ablation) |
+| Training epochs, batch, lr, accumulation, loss weights | `train:` in `restoration.yaml` |
+| Detection backend | `detector.backend` in `detection.yaml` — `yolo` · `ssd` · `none`, or any name registered with `@register_detector`. A list runs one per row in `evaluate.py` |
+| Detector checkpoints | `weights.<backend>` in `detection.yaml` |
+| Detector confidence floor | `detector.conf` in `detection.yaml` |
+| Class names | `names:` in `detection.yaml` — a YOLO checkpoint's own names win over the list |
+| Box size gate | `detector.min_width` / `min_height` / `min_area` in `detection.yaml` |
+| Detector inference size | `detector.imgsz` in `detection.yaml` |
 
-`demo.py` and `evaluate.py` add the detection flags. `train.py` does not — it only ever
-fits the restoration network.
+The inference scripts never need the architecture settings anyway: a checkpoint carries
+the architecture it was trained with.
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--detector <name>` | `yolo` | `yolo` · `ssd` · `none`, or any backend registered with `@register_detector` |
-| `--det-weights <path>` | per backend, from `detection.yaml` | Detector checkpoint |
-| `--conf <float>` | `0.25` | Detector confidence floor |
-
-Class names come from `names:` in `configs/detection.yaml` — override them with a small
-`--detection-config` YAML. A YOLO checkpoint's own names win over that list.
-
-`train.py` also takes the 10 `--no-*` ablation flags. See [Ablation](#ablation). The two
-inference scripts do not need them: a checkpoint carries the architecture it was trained
-with.
+The flags that remain are about the run in front of you — which data, where the output
+goes, how much of it to process, and on the live rig which hardware. Full list:
+`python <script>.py --help`. `--device cuda|cpu` is on `demo.py` and `train.py`;
+`evaluate.py` always resolves it (cuda if present).
 
 ---
 
@@ -55,31 +58,31 @@ that is `evaluate.py`'s job.
 | | Default | Change it with |
 |---|---|---|
 | Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
-| Output | `output/<timestamp>/` | `--output <dir>` · `--name <name>` |
+| Output | `output/<timestamp>/` | `--output <dir>` |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--limit N` | `0` | Cap how many pairs are processed. `0` = all |
 | `--save-every N` | `1` | Image save interval. `0` keeps the csv only |
-| `--save-kinds a,b` | all three | Subset of `distorted`, `restored`, `panel` |
 | `--video` | off | Also write the 2×2 panels as `result.mp4` |
+| `--device cuda\|cpu` | cuda if present | — |
 
 Images are written at JPEG quality 92. Box size gating comes from
 `detector.min_width` / `min_height` / `min_area` in `configs/detection.yaml`; every box
 that clears it is kept, because metric code must not lose duplicates.
 
 ```bash
-python demo.py --detector ssd --conf 0.4
-python demo.py --detector none --save-kinds restored
-python demo.py --input /path/to/pairs --name my_run
+python demo.py --input /path/to/pairs
+python demo.py --limit 5 --save-every 0
 ```
 
-`--save-every 0` writes no images at all. Useful when only the csv and the summary
-matter, e.g. sweeping detectors:
+To restore without detecting, set `detector.backend: none` in
+`configs/detection.yaml`. Comparing detectors is `evaluate.py`'s job — that is where a
+list of backends produces one row each.
 
-```bash
-for D in yolo ssd; do python demo.py --detector $D --save-every 0 --name run_$D; done
-```
+`--save-every 0` writes no images at all, which is what you want when only the csv and
+the summary matter. Each run lands in its own `output/<timestamp>/`, so repeated runs
+never overwrite each other.
 
 ---
 
@@ -87,27 +90,54 @@ for D in yolo ssd; do python demo.py --detector $D --save-every 0 --name run_$D;
 
 Needs real hardware: a webcam pointed at a screen a projector is throwing to.
 
+### The rig is configured, not flagged
+
+Which monitor, which webcam and how far the camera lags are properties of the physical
+setup, so they live in
+[configs/live.yaml](projector_distortion/configs/live.yaml) — set once per machine:
+
+```yaml
+rig:
+  screen: 1               # monitor the projector is on; 0 = primary
+  camera: 0               # webcam index
+  cam_backend: auto       # auto | any | dshow | msmf | v4l2
+  offset: 6               # projector → camera latency, in frames
+```
+
+`offset` is the one worth measuring: the camera frame showing light frame N arrives
+`offset` frames later, so it is what pairs a capture with the frame that caused it. Too
+low feeds the model the previous frame's light, too high a future one. Measure it once
+with `--debug-view`.
+
+The requested camera resolution and rate are fixed at 1280×960 @30fps
+(`CAM_WIDTH` / `CAM_HEIGHT` / `CAM_FPS` in `projector_distortion/pipeline/live.py`).
+Drivers routinely ignore the request, which is why the startup line prints what the
+camera actually opened at.
+
+`Data.py` and the scripts under `data/` read the same kind of settings from
+[configs/collect.yaml](projector_distortion/configs/collect.yaml), under `session:`,
+`light:`, `capture:`, `warp:` and `record:`. Two files rather than one because the
+collection scripts run without torch and never import the pipeline package.
+
+### Flags
+
 | | Default | Change it with |
 |---|---|---|
-| Projected clip | `data/live/BeamVideo.mp4` | `--clip <path>` |
-| Calibration background | `data/live/BaseBackGround.jpg` | `--background <path>` |
-| Camera | index 0, 1280×960 @30fps | `--camera N` · `--cam-width/height/fps` · `--cam-backend` |
-| Output | `output/<timestamp>/` + `calib/` + `result.mp4` | `--output <dir>` · `--name <name>` |
+| Projected clip | `data/live/test_light.mp4` — the held-out source | `--clip <path>` |
+| Calibration background | `data/live/BaseBackGround.jpg` | fixed (`DEFAULT_LIVE_BG` in `projector_distortion/cli.py`) |
+| Output | `output/<timestamp>/` + `calib/` + `result.mp4` | `--output <dir>` |
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--screen N` | `1` | Monitor index the projector is attached to. `0` = primary |
-| `--offset N` | `6` | Projector→camera latency, in frames |
-| `--analyse-every N` | `0` | Restore+detect every Nth frame. `0` = measure and pick |
-| `--max-frames N` | `0` | `0` = until the clip ends |
 | `--manual-calib` | off | Click the 4 corners instead of auto-detecting them |
 | `--debug-view` | off | Live window with the pre-warp camera feed and the quad |
-| `--calib-settle F` | `0.8` | Seconds to wait after each calibration flash |
-| `--cam-backend` | `auto` | `auto` · `any` · `dshow` · `msmf` · `v4l2` |
+
+The run goes to the end of the clip, and the analysis stride is always measured rather
+than named — see below.
 
 ```bash
-python demo.py --live --screen 2
-python demo.py --live --screen 2 --save-every 30 --debug-view
+python demo.py --live
+python demo.py --live --save-every 30 --debug-view
 ```
 
 Press `q` in the `Combined_View` window to stop.
@@ -122,9 +152,10 @@ Restore+detect runs on a worker thread over an evenly spaced subset — every Nt
 recorded panel plays like the clip, only at a lower rate. Frames in between are still
 projected and captured, just not scored.
 
-`--analyse-every 0` times the first dozen analysed frames, discards the CUDA warmup
-outlier, and fixes N from the median. It is never re-tuned mid-run, because changing N is
-itself what makes the analysed video uneven.
+N is measured, not named: the run times its first dozen analysed frames, discards the
+CUDA warmup outlier, and fixes N from the median — the densest stride that stays
+perfectly evenly spaced. It is never re-tuned mid-run, because changing N is itself
+what makes the analysed video uneven.
 
 The summary reports both rates:
 
@@ -136,17 +167,19 @@ projector 29.1 fps (450 frames) | analysis 13.0 fps (every 2 frame(s): 201 analy
 `skipped` is by design — those frames were never meant for the model. `dropped` means the
 worker missed its deadline. That is the number to watch.
 
-Denser than the auto value costs evenness. On a 30 fps clip with a worker taking ~41 ms:
+Denser than the measured value costs evenness, which is why it is not offered as a
+knob. On a 30 fps clip with a worker taking ~41 ms:
 
-| `--analyse-every` | projector | analysis | frames analysed | spacing |
+| stride | projector | analysis | frames analysed | spacing |
 |---|---|---|---|---|
 | `1` | 28.5 fps | 21.8 fps | 76% | 89% even |
-| `2` (auto here) | 28.8 fps | 13.9 fps | 48% | 100% even |
+| `2` (measured here) | 28.8 fps | 13.9 fps | 48% | 100% even |
 | `3` | 28.8 fps | 9.4 fps | 32% | 100% even |
 
-`1` analyses 1.6x more frames and barely touches playback. It just cannot hit every slot:
-a 30 fps budget is 33 ms and the worker needs 41. Pick it when coverage matters more than
-a smooth panel.
+`1` analyses 1.6x more frames and barely touches playback, but it cannot hit every slot:
+a 30 fps budget is 33 ms and the worker needs 41. The run picks `2` — the densest stride
+that stays exactly even — because an unevenly sampled panel is harder to read than a
+sparser one.
 
 ### Calibration
 
@@ -156,7 +189,44 @@ is computed and reused for every frame.
 
 **It happens once, before the loop.** If the camera or projector moves mid-run, the warp
 stays wrong for the rest of the session. Watch for that with `--debug-view`.
-Auto-detection falls back to manual clicking on failure; `--manual-calib` starts there.
+
+#### The run stops and shows you the warp
+
+Because the estimate is made once and reused, a quad that is off by a corner poisons
+every frame quietly — the panel still looks plausible and the residual is nonsense.
+So the run holds the rectified first frame on screen, next to the raw camera view with
+the detected quad drawn on it, and waits:
+
+```
+    auto calibration -> warp target 968x545:
+      TL (   241,    118)
+      TR (  1183,    131)
+      BR (  1176,    701)
+      BL (   233,    688)
+      covers 41% of the 1280x960 camera frame
+      edges  top 942  right 570  bottom 943  left 570 px
+    [calibration] enter/a accept | m click the corners | r re-detect | q quit
+```
+
+| Key | Does |
+|---|---|
+| `enter` · `space` · `a` | Accept and start the run |
+| `m` | Click the 4 corners on the live feed yourself. Any order — they get sorted |
+| `r` | Flash black/white again and re-detect. Worth a try after killing a lamp or a reflection |
+| `q` | Abort the run |
+
+Read the two numbers under the corners: **covers** should be roughly the fraction of
+frame the screen really occupies, and opposite **edges** should be close to equal. A
+quad that grabbed a window or a lamp usually shows up as one of those being wildly off,
+before you even look at the picture.
+
+If auto-detection found nothing there is no preview and no accept — only `m`, `r` and
+`q`. `--manual-calib` skips straight to clicking, and the review still runs afterwards.
+
+Set `rig.review_calibration: false` in
+[configs/live.yaml](projector_distortion/configs/live.yaml) for an unattended run,
+where there is nobody to press a key. Auto-detection then falls back to manual clicking
+on failure, exactly as it did before.
 
 `output/<run>/calib/` is written even when detection failed — that is when it matters.
 
@@ -164,7 +234,7 @@ Auto-detection falls back to manual clicking on failure; `--manual-calib` starts
 |---|---|
 | `quad.jpg` | Do the 4 points sit on the screen corners? |
 | `mask.jpg` | Is the white region just the screen, or did lights get caught? |
-| `diff.jpg` | Is the flash difference strong enough? If not, raise `--calib-settle` |
+| `diff.jpg` | Is the flash difference strong enough? If not, raise `CALIB_SETTLE` in `pipeline/live.py` |
 | `warped.jpg` | Is the rectified result actually square? |
 | `frame_pre.jpg` | The run's first camera frame, raw |
 | `frame_post.jpg` | That frame rectified, at the model input size |
@@ -177,7 +247,7 @@ projection drifted in between, that is where it shows.
 ### Long unattended recording
 
 ```bash
-python demo.py --live --screen 2 --save-every 300 --save-kinds panel
+python demo.py --live --save-every 300
 ```
 
 The csv covers every frame while images land sparsely, which keeps disk usage predictable.
@@ -193,7 +263,7 @@ Only samples that have both `surface` and `label` are scored.
 |---|---|---|
 | Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
 | GT | `data/SampleData/sample_eval/` (`surface/` + `labels/`) | `--gt <dir>` |
-| Output | `output/Eval_<input dataset>/` | `--output <dir>` · `--name <name>` |
+| Output | `output/Eval_<input dataset>/` | `--output <dir>` |
 
 `labels/` may hold YOLO `.txt` or LabelMe `.json`; the extension decides which reader runs,
 so the held-out split needs nothing but its path. LabelMe stores class *names*, and those
@@ -208,12 +278,20 @@ Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--detector yolo,ssd` | `yolo` | Comma separated here: one row per backend, compared in one run |
 | `--iou <float>` | `0.5` | IoU threshold for a true positive |
 | `--limit N` | `0` | Cap how many pairs are scored |
 
+`evaluate.py` has no model flags at all — not even `--device`. Which backends it scores
+comes from `detector.backend` in `configs/detection.yaml`, and a list there is what puts
+one row per backend in the same report:
+
+```yaml
+detector:
+  backend: [yolo, ssd]
+```
+
 ```bash
-python evaluate.py --detector yolo,ssd --iou 0.5
+python evaluate.py --iou 0.5
 ```
 
 The report directory is named after the input dataset, so `data/SampleData/sample_eval`
@@ -232,9 +310,9 @@ pc.pivot_table(index="name", columns="source", values="ap")   # per-class AP shi
 `mAP` here is the single-IoU-threshold average precision over classes — VOC style, area
 under the interpolated PR curve. Not COCO's IoU-averaged metric.
 
-> `--det-weights` names one checkpoint, so it can belong to only one backend. With
-> `--detector a,b` it is warned about and ignored, and every backend falls back to
-> `configs/detection.yaml`.
+> Each backend in the list loads its own checkpoint from `weights.<backend>`, which is
+> what keeps a `[yolo, ssd]` comparison from running one backend's weights through the
+> other.
 
 ---
 
@@ -275,14 +353,14 @@ never needs them. `sample_eval` and `sample_test` are held out for `evaluate.py`
 `train.data` at either would score the model on what it fitted.
 
 `--data-root` names one folder holding all three roles and wins outright, so a session
-built by `collect.py` needs nothing else. Leave it off and the three configured
-directories are used; those are globbed as written, so a relative path there is read
-against the working directory, not the project root — run from the repo root, or give
-absolute paths.
+built by `Data.py` needs nothing else — point it at the `warp_<MMDD>/` folder. Leave it
+off and the three configured directories are used; those are globbed as written, so a
+relative path there is read against the working directory, not the project root — run
+from the repo root, or give absolute paths.
 
 ```bash
-python train.py --epochs 30                              # uses train.data
-python train.py --data-root data/collected_0803          # one folder, config ignored
+python train.py --epochs 30                                 # uses train.data
+python train.py --data-root data/Create_Data/warp_0813      # one folder, config ignored
 ```
 
 `--data-root` detects the layout and looks for surface targets in this order, reading
@@ -305,16 +383,17 @@ data: 994 triplets of 1,000 distorted image(s) from distorted=data/SampleData/sa
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--epochs N` | `30` | From `configs/restoration.yaml` |
-| `--batch-size N` | `4` | ″ |
-| `--accum-steps N` | `4` | Gradient accumulation window |
-| `--lr F` | `0.0002` | ″ |
+| `--epochs N` | `30` | From `train.epochs` in `configs/restoration.yaml` |
+| `--batch-size N` | `4` | From `train.batch_size` |
+| `--lr F` | `0.0002` | From `train.lr` |
 | `--sample N` | `0` | Cap how many triplets are used |
-| `--num-workers N` | `4`, or `8` for batch > 4 | DataLoader workers |
-| `--resume <ckpt>` | — | Continue from a checkpoint. Its architecture wins over `--no-*` |
-| `--seed N` | `42` | — |
+| `--resume <ckpt>` | — | Continue from a checkpoint. Its architecture wins over `ablation:` |
 | `--no-amp` | off | Disable mixed precision on CUDA |
-| `--save-every N` | `1` | Epochs between `epoch_N.pt` saves |
+| `--device cuda\|cpu` | cuda if present | — |
+
+Fixed rather than flagged: the gradient accumulation window is `train.accum_steps` in
+the YAML, the seed is `42` (`SEED` in `train.py`), DataLoader workers are `4`, or `8` for
+batch > 4, and every epoch writes an `epoch_N.pt`.
 
 ```bash
 python train.py --epochs 30
@@ -327,42 +406,51 @@ resized to 360×640 then randomly cropped to 180×320. What the loss measures an
 
 ### Ablation
 
-Ten structural pieces can be switched off individually. Whatever is off lands in `tag`,
-which goes into both the run folder and the checkpoint filename.
+Ten structural pieces can be switched off individually, in the `ablation:` block of
+`projector_distortion/configs/restoration.yaml`. Whatever is off lands in `tag`, which
+goes into both the run folder and the checkpoint filename.
 
-| Flag | Turns off | Tag |
+| Set to `false` | Turns off | Tag |
 |---|---|---|
-| `--no-prenorm` | The pre-LayerNorm of NAFSEBlock | `NoPre` |
-| `--no-naf-norm` | LayerNorm2d inside NAFBlock | `NoNorm` |
-| `--no-simple-gate` | SimpleGate (`x1*x2`), replaced by GELU | `NoGate` |
-| `--no-naf-scale` | The learnable residual scales beta / gamma | `NoScale` |
-| `--no-ca` | Channel attention; the block becomes a plain NAFBlock | `NoCA` |
-| `--no-skip1` | U-Net skip enc1 → dec1 (full resolution) | `NoSkip1` |
-| `--no-skip2` | U-Net skip enc2 → dec2 (1/2) | `NoSkip2` |
-| `--no-skip3` | U-Net skip enc3 → dec3 (1/4) | `NoSkip3` |
-| `--no-bottleneck` | The 1/8-resolution bottleneck, replaced by Identity | `NoBott` |
-| `--no-tanh` | The output tanh; the residual becomes unbounded | `NoTanh` |
+| `use_prenorm` | The pre-LayerNorm of NAFSEBlock | `NoPre` |
+| `use_naf_norm` | LayerNorm2d inside NAFBlock | `NoNorm` |
+| `use_simple_gate` | SimpleGate (`x1*x2`), replaced by GELU | `NoGate` |
+| `use_naf_scale` | The learnable residual scales beta / gamma | `NoScale` |
+| `use_ca` | Channel attention; the block becomes a plain NAFBlock | `NoCA` |
+| `use_skip1` | U-Net skip enc1 → dec1 (full resolution) | `NoSkip1` |
+| `use_skip2` | U-Net skip enc2 → dec2 (1/2) | `NoSkip2` |
+| `use_skip3` | U-Net skip enc3 → dec3 (1/4) | `NoSkip3` |
+| `use_bottleneck` | The 1/8-resolution bottleneck, replaced by Identity | `NoBott` |
+| `use_tanh` | The output tanh; the residual becomes unbounded | `NoTanh` |
 
 Several combine: `NoCA-NoSkip3`. Nothing off is `FULL`.
 
-Capacity can be overridden too: `--base-dim` (48), `--enc-depth` (`2,2,3`), `--dec-depth`
-(`2,2,2`), `--bottleneck-depth` (2), `--dw-expand` (2), `--ffn-expand` (2),
-`--ca-reduction` (16).
+Capacity sits in the same block: `base_dim` (48), `enc_depth` (`[2, 2, 3]`), `dec_depth`
+(`[2, 2, 2]`), `bottleneck_depth` (2), `dw_expand` (2), `ffn_expand` (2), `ca_reduction`
+(16).
 
-```bash
-python train.py --no-ca --epochs 30
+```yaml
+# projector_distortion/configs/restoration.yaml
+ablation:
+  use_ca: false
 ```
 
-Checkpoints embed their own architecture config, so the flags never need repeating — and
-`demo.py` / `evaluate.py` do not accept them at all:
-
 ```bash
-python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
+python train.py --epochs 30      # writes runs/<date>_30ep_NoCA/
+```
+
+Checkpoints embed their own architecture config, so the `ablation:` block does not have
+to stay set for inference — point `model.weights` at the new checkpoint and run:
+
+```yaml
+# projector_distortion/configs/restoration.yaml
+model:
+  weights: runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
 ```
 
 The exception is a *legacy* checkpoint saved as a bare `state_dict` with no config in it.
-Those fall back to the default (`FULL`) architecture; an ablated one has to be described
-through the `ablation:` block of a `--restoration-config` YAML instead. Every checkpoint
+Those fall back to whatever `ablation:` currently says, so an ablated legacy checkpoint
+needs that block set to match it before it will load correctly. Every checkpoint
 `train.py` writes carries its own config, so this only affects weights from elsewhere.
 
 ---
@@ -390,12 +478,7 @@ a jpg cannot be undone.
 
 Only three kinds are written. The annotated views, the residual heatmap and the light frame are
 tiles of the panel already, so writing them again cost four extra encodes a frame and
-bought nothing. Drop kinds further with `--save-kinds`:
-
-```bash
-python demo.py --save-kinds panel                # comparison figures only
-python demo.py --save-kinds distorted,restored   # re-scorable pixels only
-```
+bought nothing.
 
 `--save-every 0` skips the image directories entirely. `detections.csv` still covers every
 frame.
@@ -410,17 +493,20 @@ frame.
 
 Restoration is ~46% of a live frame, so it is the first thing to shrink. The network is
 fully convolutional, which makes its working resolution a runtime knob — no retraining.
-Measured on the bundled set with `--detector yolo`:
+Set it with `model.input_size` in `projector_distortion/configs/restoration.yaml`.
+Measured on the bundled set with the `yolo` detector:
 
-| `--input-size` | restore | detection mAP | PSNR gain | SSIM gain |
+| `model.input_size` | restore | detection mAP | PSNR gain | SSIM gain |
 |---|---|---|---|---|
-| `320 180` | 9.7 ms | 0.9866 | +8.95 dB | +0.163 |
-| `480 270` | 13.4 ms | **1.0000** | +11.32 dB | +0.183 |
-| `640 360` (default) | 20.5 ms | **1.0000** | **+13.17 dB** | **+0.218** |
-| `854 480` | 41.2 ms | 1.0000 | +9.89 dB | +0.145 |
+| `[320, 180]` | 9.7 ms | 0.9866 | +8.95 dB | +0.163 |
+| `[480, 270]` | 13.4 ms | **1.0000** | +11.32 dB | +0.183 |
+| `[640, 360]` (default) | 20.5 ms | **1.0000** | **+13.17 dB** | **+0.218** |
+| `[854, 480]` | 41.2 ms | 1.0000 | +9.89 dB | +0.145 |
 
-```bash
-python demo.py --live --screen 2 --input-size 480 270
+```yaml
+# projector_distortion/configs/restoration.yaml
+model:
+  input_size: [480, 270]
 ```
 
 `480 270` costs a third of the restoration time and detection does not notice. Only the
@@ -437,12 +523,12 @@ does not ship.
 
 A genuinely smaller network needs retraining. At 640×360:
 
-| `train.py` flags | params | forward |
+| `ablation:` change | params | forward |
 |---|---|---|
 | shipped | 4,184,259 | 13.8 ms |
-| `--base-dim 32` | 1,878,659 | 9.7 ms |
-| `--enc-depth 1,1,1 --dec-depth 1,1,1 --bottleneck-depth 1` | 2,418,837 | 7.3 ms |
-| `--no-ca` | 4,116,147 | 13.1 ms |
+| `base_dim: 32` | 1,878,659 | 9.7 ms |
+| `enc_depth: [1,1,1]` + `dec_depth: [1,1,1]` + `bottleneck_depth: 1` | 2,418,837 | 7.3 ms |
+| `use_ca: false` | 4,116,147 | 13.1 ms |
 
 Shallower blocks buy more than narrower ones. Dropping channel attention buys 5% and is
 not worth the retrain.

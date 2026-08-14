@@ -110,7 +110,7 @@ class BaseDetector(ABC):
 
 
 class NullDetector(BaseDetector):
-    """`--detector none`: run restoration only."""
+    """`detector.backend: none` in detection.yaml: run restoration only."""
 
     name = "none"
 

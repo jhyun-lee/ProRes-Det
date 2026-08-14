@@ -11,6 +11,13 @@ venv/
 output/*
 !output/.gitkeep
 runs/
+# Sessions collect.py writes. The trailing '_' is what keeps the bundled, tracked
+# data/SampleData/sample_train/ out of this pattern - only sample_train_<MMDD>/ matches.
+# Everything Data.py collects: projected/, raw_<MMDD>/, warp_<MMDD>/.
+data/Create_Data/
+# pre-0813 sessions, kept so an existing one stays ignored
+data/SampleData/sample_train_*/
+# pre-0812 session folders, kept so an existing one stays ignored
 data/collected_*/
 data/recordings/
 paper/

@@ -20,8 +20,8 @@ The three root scripts are thin. They parse args, then hand off.
 ```
 demo.py / evaluate.py / train.py
    │
-   ├─ cli.add_common_args        shared flags
-   ├─ cli.build_models           YAML + flags → (restorer, detector, info)
+   ├─ cli.detector_backends      detector.backend → one name, or a list to compare
+   ├─ cli.build_models           YAML → (restorer, detector, info)
    │     ├─ config.load_config   configs/*.yaml, merged
    │     ├─ models.build_restorer
    │     └─ models.build_detector
@@ -55,7 +55,7 @@ the webcam and Win32 window plumbing (`utils/display.py`) it has no use for.
 | File | Owns |
 |---|---|
 | [`__init__.py`](__init__.py) | Public API re-exports, `__version__` |
-| [`cli.py`](cli.py) | Shared argparse groups, config precedence, `build_models`, device resolution, `run_dir`, and the `pdf-*` console entry points |
+| [`cli.py`](cli.py) | Shared defaults, `build_models` (models come from YAML only), `detector_backends`, device resolution, `run_dir`, and the `pdf-*` console entry points |
 | [`config.py`](config.py) | `load_config` (YAML + recursive merge), `resolve_path` (against `PROJECT_ROOT`), `pick` (CLI over YAML) |
 | [`data.py`](data.py) | Filename → id parsing, layout detection, `find_samples`, `index_triplets`, label loading (YOLO txt and LabelMe json), `TripletPatchDataset` |
 
@@ -65,6 +65,8 @@ the webcam and Win32 window plumbing (`utils/display.py`) it has no use for.
 |---|---|
 | [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (backend, weights, input_size) · `ablation` (structure + capacity) · `train` (data paths, hyperparameters, loss weights) |
 | [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, box gate) · `weights` per backend · `names` (17 classes) |
+| [`configs/live.yaml`](configs/live.yaml) | `rig` (screen, camera, cam_backend, offset, review_calibration) — what `demo.py --live` drives |
+| [`configs/collect.yaml`](configs/collect.yaml) | `session` · `light` · `capture` · `warp` · `record` — read by `Data.py` and the scripts under `data/`, never by this package |
 
 ### `models/`
 
@@ -104,11 +106,11 @@ Window titles: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_Firs
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
 | [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`, `parse_kinds` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS` |
 | [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 monitor enumeration and borderless placement |
 
 `display.py` is separate because getting a window onto the projector is not a pipeline
-concern, and `collect.py` and `record.py` need it too. On Windows,
+concern, and `data/capture.py` and `data/record.py` need it too. On Windows,
 `cv2.setWindowProperty(WND_PROP_FULLSCREEN)` snaps the window back to the primary display
 and silently undoes `cv2.moveWindow()`, which is why a naive `--screen` has no effect;
 geometry goes through the Win32 API instead. `live.place_window` is a one-line wrapper
@@ -206,7 +208,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 
 ## Tests
 
-114 tests, no hardware needed.
+118 tests, no hardware needed.
 
 | File | Covers |
 |---|---|
@@ -214,7 +216,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 | [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | Filename ids, sample discovery, PSNR/SSIM/IoU, `RunRecorder` behaviour, triplet indexing, `average_precision`, the argparse defaults, unknown-backend handling, the `live._worker` queue contract driven with stubs, `device_note`, the `requirements-cuda.txt` pins |
 | [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig` and its tags, every toggle building and training one step, forward shapes, checkpoint round trip, the shipped weights, the restorer registry with a third-party backend |
 | [`../tests/test_detection.py`](../tests/test_detection.py) | Registry, label normalisation, the box size gate, both backends against the real checkpoints |
-| [`../tests/test_collect.py`](../tests/test_collect.py) | `collect.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the `warp` and `light` stage outputs |
+| [`../tests/test_collect.py`](../tests/test_collect.py) | `data/warp.py` and `data/make_light.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the rectified stage output and its debug figure |
 
 ```bash
 python -m pytest -q

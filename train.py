@@ -5,12 +5,16 @@ Fine-tune the restoration network on projector-distortion triplets.
 
     python train.py --epochs 30
     python train.py --data-root data/SampleData/sample_train --epochs 5 --batch-size 2
-    python train.py --no-ca                       # ablate channel attention
     python train.py --data-root /path/to/full/dataset --epochs 30
 
 The bundled training split is data/SampleData/sample_train (1,000 pairs over 20
 surfaces). sample_eval and sample_test are held out for evaluate.py and carry the
 detection labels; nothing here reads them.
+
+The architecture comes from the `ablation:` block of configs/restoration.yaml, not
+from flags - edit it there to ablate a component (`use_ca: false`) or change the
+capacity, then run this. The run directory and the checkpoint filename are tagged
+with what was ablated, so a variant stays identifiable from its path.
 
 Loss: L1 + VGG perceptual + (1 - SSIM) + high-frequency Haar, weights from
 configs/restoration.yaml (tuned by an Optuna sweep on this dataset).
@@ -38,16 +42,14 @@ import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
 
-from projector_distortion.cli import (  # noqa: E402
-    SAMPLE_TRAIN, add_common_args, resolve_device,
-)
+from projector_distortion.cli import SAMPLE_TRAIN, resolve_device  # noqa: E402
 from projector_distortion.config import load_config, pick, resolve_path  # noqa: E402
 from projector_distortion.data import (  # noqa: E402
     RESEARCH_DIRS, TripletPatchDataset, index_triplets,
 )
 from projector_distortion.models.restoration import (  # noqa: E402
-    ARCH_NAME, add_ablation_args, build_network, config_from_args, count_parameters,
-    load_checkpoint, save_checkpoint,
+    ARCH_NAME, RestorationConfig, build_network, count_parameters, load_checkpoint,
+    save_checkpoint,
 )
 
 
@@ -106,6 +108,10 @@ class PerceptualLoss(nn.Module):
 
 DEFAULT_DATA_ROOT = SAMPLE_TRAIN
 
+# Fixed so two runs of the same config index the same triplets in the same order;
+# an ablation is only comparable against a baseline that saw the same data.
+SEED = 42
+
 # train.data keys, and the pre-rename spelling each one replaced.
 DATA_KEYS = {"distorted": "pro", "light": "beam", "surface": "clean"}
 
@@ -135,23 +141,20 @@ def build_parser():
     p.add_argument("--gt", default=None,
                    help="where surface/ lives when it is not under --data-root")
     p.add_argument("--out", default="runs", help="parent folder for run directories")
-    p.add_argument("--epochs", type=int, default=None)
-    p.add_argument("--batch-size", type=int, default=None)
-    p.add_argument("--accum-steps", type=int, default=None)
-    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--epochs", type=int, default=None,
+                   help="default: train.epochs in configs/restoration.yaml")
+    p.add_argument("--batch-size", type=int, default=None,
+                   help="default: train.batch_size in configs/restoration.yaml")
+    p.add_argument("--lr", type=float, default=None,
+                   help="default: train.lr in configs/restoration.yaml")
     p.add_argument("--sample", type=int, default=0, help="cap the triplet count")
-    p.add_argument("--num-workers", type=int, default=None)
-    p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resume", default=None, help="checkpoint to continue from")
     p.add_argument("--no-amp", action="store_true")
-    p.add_argument("--save-every", type=int, default=1, help="epochs between saves")
-    # No detection flags: training only ever fits the restoration network.
-    add_common_args(p, detector=False)
-    add_ablation_args(p)
+    p.add_argument("--device", default=None, help="cuda | cpu (default: cuda if present)")
     return p
 
 
-def seed_everything(seed=42):
+def seed_everything(seed=SEED):
     import random
     random.seed(seed)
     np.random.seed(seed)
@@ -196,23 +199,23 @@ def _optimizer_step(net, opt, scaler):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    seed_everything(args.seed)
+    seed_everything()
 
-    rest_cfg = load_config("restoration", args.restoration_config)
+    rest_cfg = load_config("restoration")
     tcfg = rest_cfg.get("train", {})
     device = resolve_device(args.device)
     epochs = int(pick(args.epochs, tcfg, "epochs", default=30))
     batch_size = int(pick(args.batch_size, tcfg, "batch_size", default=4))
-    accum = int(pick(args.accum_steps, tcfg, "accum_steps", default=4))
+    accum = int(pick(None, tcfg, "accum_steps", default=4))
     lr = float(pick(args.lr, tcfg, "lr", default=2e-4))
-    workers = args.num_workers if args.num_workers is not None else (
-        4 if batch_size <= 4 else 8)
+    workers = 4 if batch_size <= 4 else 8
     weights = {k: float(v) for k, v in (tcfg.get("loss") or {}).items()}
     weights.setdefault("l1", 1.0)
 
-    # A resumed checkpoint carries its own architecture, and that wins over --no-*.
+    # A resumed checkpoint carries its own architecture, and that wins over the
+    # `ablation:` block - continuing a run must not silently change the network.
     net = None
-    cfg = config_from_args(args)
+    cfg = RestorationConfig.from_dict(rest_cfg.get("ablation") or {})
     if args.resume:
         net, cfg, meta = load_checkpoint(resolve_path(args.resume), device=device)
         print(f"resuming from {args.resume} (cfg via {meta['cfg_source']})")
@@ -237,13 +240,13 @@ def main(argv=None):
     configured = _configured_data(tcfg.get("data"))
     if not args.data_root and any(configured.values()):
         data_root = configured
-        triplets = index_triplets(sample=args.sample, seed=args.seed, **configured)
+        triplets = index_triplets(sample=args.sample, seed=SEED, **configured)
     else:
         root = args.data_root or DEFAULT_DATA_ROOT
         data_root = resolve_path(root) or root
         surface_root = _surface_root(data_root, resolve_path(args.gt))
         triplets = index_triplets(data_root, surface_root=surface_root,
-                                  sample=args.sample, seed=args.seed)
+                                  sample=args.sample, seed=SEED)
     patch = tuple(pick(None, tcfg, "patch_size", default=[180, 320]))
     big = tuple(pick(None, tcfg, "resize_to", default=[360, 640]))
     dataset = TripletPatchDataset(triplets, small_size=patch, big_size=big)
@@ -326,8 +329,7 @@ def main(argv=None):
         extra = dict(epoch=epoch + 1, epochs=epochs, loss=row["total"],
                      loss_weights=weights, batch_size=batch_size, accum_steps=accum,
                      lr=lr, data_root=data_root, triplets=len(triplets))
-        if (epoch + 1) % args.save_every == 0 or epoch + 1 == epochs:
-            save_checkpoint(os.path.join(run, f"epoch_{epoch + 1}.pt"), net, cfg, **extra)
+        save_checkpoint(os.path.join(run, f"epoch_{epoch + 1}.pt"), net, cfg, **extra)
         if row["total"] < best:
             best = row["total"]
             save_checkpoint(os.path.join(run, f"restorer_{tag}_best.pt"), net, cfg,
@@ -341,8 +343,9 @@ def main(argv=None):
             torch.cuda.empty_cache()
 
     print(f"\ndone. best loss {best:.5f}\n  -> {run}")
-    print(f"  use it:  python demo.py --restorer-weights "
-          f"{os.path.join(run, f'restorer_{tag}_best.pt')}")
+    print(f"  use it:  set model.weights in configs/restoration.yaml to\n"
+          f"           {os.path.join(run, f'restorer_{tag}_best.pt')}\n"
+          f"           then run: python demo.py")
     return 0
 
 

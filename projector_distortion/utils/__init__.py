@@ -16,7 +16,7 @@ from .image import (
     ssim,
     tensor_to_bgr,
 )
-from .recording import FRAME_KINDS, RunRecorder, parse_kinds
+from .recording import FRAME_KINDS, RunRecorder
 from .visualize import (
     caption,
     draw_detections,
@@ -31,5 +31,5 @@ __all__ = [
     "psnr", "ssim", "iou", "IMAGE_EXT",
     "draw_detections", "caption", "grid_2x2",
     "panel_size", "draw_quad", "warp_before_after",
-    "RunRecorder", "FRAME_KINDS", "parse_kinds",
+    "RunRecorder", "FRAME_KINDS",
 ]

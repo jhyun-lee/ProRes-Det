@@ -13,14 +13,13 @@
 ## 파일
 
 세 개 모두 git에 커밋되어 있다 — 합계 51 MiB. 클론 직후 별도 다운로드 없이 실행된다. 다른
-가중치를 쓰려면 이 파일들을 덮어쓰지 말고 `--restorer-weights` / `--det-weights`로 경로를
-지정한다.
+가중치를 쓰려면 이 파일들을 덮어쓰지 말고 아래 config가 그쪽을 가리키게 한다.
 
 | 파일 | 용도 | 구조 | 파라미터 | 크기 |
 |---|---|---|---|---|
 | `restorer_nafse_unet.pt` | 복원 | NAFSEBlock 3-level U-Net | 4,184,259 | 16.1 MiB |
-| `detector_yolo11s.pt` | `--detector yolo` | YOLO11s | 9,434,371 | 18.3 MiB |
-| `detector_ssdlite.pth` | `--detector ssd` | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
+| `detector_yolo11s.pt` | `yolo` 검출기 | YOLO11s | 9,434,371 | 18.3 MiB |
+| `detector_ssdlite.pth` | `ssd` 검출기 | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
 
 세 개 모두 동일한 17클래스 프로젝터 왜곡 데이터셋으로 파인튜닝됐다 — 과일 11개, 동물 6개.
 클래스 목록은 [configs/detection.yaml](../projector_distortion/configs/detection.yaml)에 있다.
@@ -31,7 +30,8 @@ torchvision에는 이름이 없으므로 `ssd`는 항상 config의 목록을 쓴
 
 ## 경로가 오는 곳
 
-config에서. 소스에 하드코딩된 경로는 없다.
+config에서만. 소스에 하드코딩된 경로도, 이 경로들을 덮는 CLI 플래그도 없다. 체크포인트
+교체는 한 줄 수정이고 모든 엔트리포인트가 한 번에 따라간다.
 
 ```yaml
 # projector_distortion/configs/restoration.yaml
@@ -47,11 +47,6 @@ weights:
 
 이 경로들은 작업 디렉터리가 아니라 프로젝트 루트 기준으로 해석된다.
 
-```bash
-python demo.py --restorer-weights path/to/other.pt
-python demo.py --detector ssd --det-weights path/to/other.pth
-```
-
 ---
 
 ## 체크포인트 포맷
@@ -65,12 +60,14 @@ python demo.py --detector ssd --det-weights path/to/other.pth
 ```
 
 `load_checkpoint()`가 `cfg`를 읽어 맞는 아키텍처를 재구성한다. 그래서 ablation 변형도 추론
-시점에 플래그를 다시 줄 필요가 없다.
+시점에 설정을 다시 줄 필요가 없다.
 
 ```bash
-python train.py --no-ca --epochs 30
-python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
-#                                  ↑ --no-ca 불필요
+# projector_distortion/configs/restoration.yaml 의 ablation: { use_ca: false }
+python train.py --epochs 30
+# 그다음 model.weights를 runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt 로
+python demo.py
+#   ablation 블록을 그대로 둘 필요는 없다. config가 체크포인트에 같이 실려 있다
 ```
 
 실행 시 config 출처가 출력된다:
@@ -113,7 +110,7 @@ restored = (distorted - residual).clamp(-1, 1)
 
 **3) 값이 발산할 수 없다.**
 출력 `tanh`가 residual을 [-1, 1]로 묶고, 뺄셈 후의 `clamp(-1, 1)`이 결과를 다시 묶는다 —
-범위 통제 2중. `--no-tanh`가 첫 번째를 제거하고, 그것이 ablation 스위치 중 하나다.
+범위 통제 2중. `use_tanh: false`가 첫 번째를 제거하고, 그것이 ablation 스위치 중 하나다.
 
 ### 어떻게 강제되나 — 손실은 residual이 아니라 `restored`에 걸린다
 

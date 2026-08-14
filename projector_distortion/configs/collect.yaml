@@ -1,0 +1,85 @@
+# Dataset collection defaults - everything data/*.py reads.
+#
+# Only the settings that genuinely change between runs are still CLI flags
+# (--root, --screen, --camera, --rounds, --limit, --step, --augment, --settle-ms,
+# --seconds). Everything else is a property of the rig or of the naming convention,
+# gets set once, and lives here.
+#
+# Relative paths resolve against the project root, so they work from any directory.
+
+session:
+  # Everything a collection run produces lives under one folder:
+  #
+  #   <dir>/projected/      the light frames - built once, shared by every day
+  #   <dir>/raw_<MMDD>/     that day's captures, unrectified
+  #   <dir>/warp_<MMDD>/    the rectified pairs, plus debug/
+  #
+  # projected/ is deliberately not dated: extracting the clips again per day would
+  # cost disk and buy nothing, since the frames are identical. The captures are,
+  # because a rig gets moved and a scene gets rebuilt between days.
+  dir: data/Create_Data
+  projected: projected
+  raw_prefix: raw_
+  warp_prefix: warp_
+  # High enough that compression artefacts stay well under the distortion the model
+  # is being asked to learn.
+  jpeg_quality: 95
+
+light:
+  # The clips whose frames become the `light` half of a training pair.
+  # data/live/test_light.mp4 is the held-out projection source and is deliberately
+  # absent: a set collected from these shares no projected frame with the test split.
+  src:
+    - data/live/train_light_1.mp4
+    - data/live/train_light_2.mp4
+    - data/live/train_light_3.mp4
+  step: 30                # keep every Nth frame; 30 = one per second at 30fps
+  augment: full           # full (6x) | invert (2x) | none (1x)
+  # Saved resolution of a light frame. Downscaled again at the warp stage, so this
+  # only has to be comfortably above the model's input size.
+  size: [1280, 720]
+  # Hue rotation bands, one random angle drawn per band, so the four colour copies
+  # of a frame are spread across the wheel instead of clustering.
+  hue_bands: [[0, 45], [45, 90], [90, 140], [140, 180]]
+  first_video_index: 1000
+  seed: null              # null = unseeded; set an int to reproduce the hue angles
+
+capture:
+  screen: 1               # monitor the projector is on; 0 = primary
+  camera: 0
+  cam_backend: auto       # auto | any | dshow | msmf | v4l2
+  background: data/live/BaseBackGround.jpg
+  rounds: 10              # scene setups; each starts with a fresh surface shot
+  limit: 50               # light frames drawn per round, at random. 0 = all of them
+  # Milliseconds a light frame is held on screen before its capture is kept.
+  #
+  # The single number that decides whether a pair is really a pair. The projector has
+  # to put the frame up, the panel has to finish changing, and - the slow one - the
+  # camera's auto-exposure and white balance have to re-converge. Consecutive light
+  # frames are inverted or hue-rotated copies of each other, so almost every step is
+  # a large brightness swing and an AE loop needs the better part of a second.
+  settle_ms: 1200
+  flush: 3                # queued frames dropped before the one-off surface shot
+  round_settle: 2.0       # seconds between the surface shot and the first projection
+  preview_every: 10
+  seed: null              # null = unseeded, so two sessions accumulate variety
+
+warp:
+  mode: boundary          # boundary | homography | tps
+  work_size: [1280, 720]  # rectification resolution, before the final downscale
+  final_size: [640, 360]  # saved resolution - the model input
+  points: 20              # boundary correspondences sampled along each screen edge
+  inset: 2                # pixels the boundary is pulled in, off the projection rim
+  debug: true             # write the before/after overlays to <root>/debug
+
+record:
+  clip: data/live/test_light.mp4
+  out_dir: data/recordings
+  screen: 1
+  camera: 0
+  cam_backend: auto
+  background: data/live/BaseBackGround.jpg
+  codec: mp4v             # fourcc; mp4v is the one OpenCV reliably has built in
+  fps_probe: 24           # frames measured before the header fps is fixed
+  preview_every: 5
+  max_queued: 32          # camera frames allowed to wait on the encoder

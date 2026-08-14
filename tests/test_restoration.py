@@ -63,8 +63,8 @@ def test_tanh_bounds_the_residual():
     assert out.min() >= -1.0 and out.max() <= 1.0
 
 
-@pytest.mark.parametrize("attr,flag,tag", TOGGLES)
-def test_every_toggle_builds_trains_one_step(attr, flag, tag):
+@pytest.mark.parametrize("attr,tag", TOGGLES)
+def test_every_toggle_builds_trains_one_step(attr, tag):
     cfg = RestorationConfig(**{attr: False}, base_dim=16, enc_depth=(1, 1, 1),
                             dec_depth=(1, 1, 1), bottleneck_depth=1)
     net = build_network(cfg)

@@ -1,8 +1,9 @@
-"""data/collect.py - the capture-side dataset builder, and the live warp evidence."""
+"""data/warp.py - the rectification stage, and the live warp evidence."""
 
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 
 import cv2
@@ -15,10 +16,23 @@ from projector_distortion.utils.image import psnr
 from projector_distortion.utils.recording import RunRecorder
 from projector_distortion.utils.visualize import warp_before_after
 
-_spec = importlib.util.spec_from_file_location(
-    "collect", os.path.join(ROOT, "data", "collect.py"))
-collect = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(collect)
+# data/ holds standalone scripts, not a package, so they are loaded by path. Their own
+# `common` import needs data/ on sys.path, which is what the scripts do for themselves
+# when run directly.
+_DATA = os.path.join(ROOT, "data")
+if _DATA not in sys.path:
+    sys.path.insert(0, _DATA)
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_DATA, f"{name}.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+warp = _load("warp")
+make_light = _load("make_light")
 
 # A screen seen well off-axis: the case a bilinear interior model gets wrong.
 CORNERS = np.float32([[150, 120], [1130, 60], [1180, 860], [95, 800]])
@@ -27,8 +41,8 @@ SIZE = (1280, 720)
 
 def _quad_contour(corners=CORNERS, per_edge=200):
     """The quad outline as a dense contour, like findContours would return."""
-    edges = [collect.resample(np.vstack([corners[i], corners[(i + 1) % 4]]),
-                              per_edge + 1)[:-1] for i in range(4)]
+    edges = [warp.resample(np.vstack([corners[i], corners[(i + 1) % 4]]),
+                           per_edge + 1)[:-1] for i in range(4)]
     return np.vstack(edges).reshape(-1, 1, 2).astype(np.int32)
 
 
@@ -42,7 +56,7 @@ def _capture(img, corners=CORNERS, canvas=(1280, 960)):
 # --- boundary sampling --------------------------------------------------------
 
 def test_resample_keeps_both_ends_and_spaces_evenly():
-    pts = collect.resample(np.float32([[0, 0], [10, 0], [100, 0]]), 11)
+    pts = warp.resample(np.float32([[0, 0], [10, 0], [100, 0]]), 11)
     assert len(pts) == 11
     assert pts[0].tolist() == [0, 0] and pts[-1].tolist() == [100, 0]
     gaps = np.diff(pts[:, 0])
@@ -51,14 +65,14 @@ def test_resample_keeps_both_ends_and_spaces_evenly():
 
 def test_boundary_points_are_matched_pairs_without_duplicate_corners():
     contour = _quad_contour()
-    corners = collect.quad_corners(contour)
-    src, dst = collect.boundary_points(collect.edge_paths(contour, corners), 20, SIZE)
+    corners = warp.quad_corners(contour)
+    src, dst = warp.boundary_points(warp.edge_paths(contour, corners), 20, SIZE)
     assert len(src) == len(dst) == 20
     assert len(np.unique(dst, axis=0)) == 20, "TPS rejects duplicated correspondences"
 
 
 def test_corners_come_back_ordered_tl_tr_br_bl():
-    corners = collect.quad_corners(_quad_contour())
+    corners = warp.quad_corners(_quad_contour())
     assert corners is not None
     assert np.allclose(corners, CORNERS, atol=2)
 
@@ -74,15 +88,14 @@ def test_boundary_warp_matches_the_homography_on_a_flat_screen():
     correction is computed in rectified space instead.
     """
     contour = _quad_contour()
-    corners = collect.quad_corners(contour)
-    map_x, map_y = collect.boundary_map(collect.edge_paths(contour, corners), corners,
-                                        SIZE)
+    corners = warp.quad_corners(contour)
+    map_x, map_y = warp.boundary_map(warp.edge_paths(contour, corners), corners, SIZE)
 
     w, h = SIZE
     rect = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
     grid = np.stack(np.meshgrid(np.arange(w, dtype=np.float32),
                                 np.arange(h, dtype=np.float32)), axis=-1)
-    expected = collect.project(grid, cv2.getPerspectiveTransform(rect, corners))
+    expected = warp.project(grid, cv2.getPerspectiveTransform(rect, corners))
 
     assert np.abs(map_x - expected[..., 0]).max() < 2.0
     assert np.abs(map_y - expected[..., 1]).max() < 2.0
@@ -92,10 +105,10 @@ def test_boundary_warp_matches_the_homography_on_a_flat_screen():
 def test_rectifier_recovers_the_projected_image(bgr_image, mode):
     source = cv2.resize(bgr_image, SIZE)
     capture = _capture(source)
-    contour = collect.screen_contour(capture, inset=0)
+    contour = warp.screen_contour(capture, inset=0)
     assert contour is not None, "no screen boundary found in the synthetic capture"
 
-    out = collect.Rectifier(contour, SIZE, mode=mode)(capture)
+    out = warp.Rectifier(contour, SIZE, mode=mode)(capture)
     assert out.shape[:2] == (SIZE[1], SIZE[0])
     assert psnr(source, out) > 18, "rectification did not undo the perspective"
 
@@ -105,46 +118,61 @@ def test_rectifier_rejects_a_boundary_that_is_not_quad_like():
                        for t in np.linspace(0, 2 * np.pi, 200, endpoint=False)],
                       np.int32)
     with pytest.raises(ValueError, match="4-corner"):
-        collect.Rectifier(circle, SIZE)
+        warp.Rectifier(circle, SIZE)
 
 
 def test_tps_mode_explains_itself_when_opencv_dropped_the_shape_module():
     if hasattr(cv2, "createThinPlateSplineShapeTransformer"):
         pytest.skip("this OpenCV still ships the shape module")
     with pytest.raises(SystemExit, match="shape module"):
-        collect.build_tps(np.zeros((4, 2), np.float32), np.zeros((4, 2), np.float32))
+        warp.build_tps(np.zeros((4, 2), np.float32), np.zeros((4, 2), np.float32))
 
 
-# --- the session on disk ------------------------------------------------------
+# --- the Create_Data layout on disk -------------------------------------------
 
-def test_warp_stage_writes_a_dataset_the_loaders_accept(bgr_image):
-    """The whole point of the naming: a collected session needs no conversion."""
+def _raw_set(root, captures, source=None):
+    """
+    A raw_<MMDD> folder, and the projected/ that sits beside it.
+
+    Mirrors what capture.py leaves behind: <root>/raw_x/{surface,distorted} with the
+    light frames one level up in <root>/projected, shared rather than copied per day.
+    """
+    raw = os.path.join(root, "raw_0812")
+    for sub in ("surface", "distorted"):
+        os.makedirs(os.path.join(raw, sub), exist_ok=True)
+    for sid, distorted_names in captures.items():
+        cv2.imwrite(os.path.join(raw, "surface", f"surface_{sid}.jpg"), source
+                    if source is not None else np.zeros((4, 4, 3), np.uint8))
+        for name in distorted_names:
+            cv2.imwrite(os.path.join(raw, "distorted", name), source)
+    return raw
+
+
+def test_warp_writes_a_dataset_the_loaders_accept(bgr_image):
+    """The point of the naming: a warp folder needs no conversion to be trainable."""
     source = cv2.resize(bgr_image, SIZE)
     capture = _capture(source)
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/surface", "raw/distorted", "light"):
-            os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        cv2.imwrite(os.path.join(tmp, "raw", "surface", "surface_0409001429.jpg"),
-                    capture)
-        cv2.imwrite(os.path.join(tmp, "raw", "distorted",
-                                 "distorted_0409001429_0803120000_1000_0.jpg"), capture)
-        cv2.imwrite(os.path.join(tmp, "light", "light_0803120000_1000_0.jpg"), source)
+        raw = _raw_set(tmp, {"0409001429": [
+            "distorted_0409001429_0803120000_1000_0.jpg"]}, capture)
+        projected = os.path.join(tmp, "projected")
+        os.makedirs(projected, exist_ok=True)
+        cv2.imwrite(os.path.join(projected, "light_0803120000_1000_0.jpg"), source)
 
-        assert collect.main(["warp", "--root", tmp, "--inset", "0"]) == 0
+        out = os.path.join(tmp, "warp_0812")
+        assert warp.main(["--raw", raw, "--out", out]) == 0
 
-        samples = find_samples(tmp, gt_root=tmp)
+        # find_samples reaches ../projected for the light half.
+        samples = find_samples(out, gt_root=out)
         assert len(samples) == 1
         assert samples[0].surface_id == "0409001429"
-        assert samples[0].surface and os.path.basename(samples[0].surface) == \
-            "surface_0409001429.jpg"
+        assert os.path.basename(os.path.dirname(samples[0].light)) == "projected"
         for path in (samples[0].distorted, samples[0].surface):
             img = cv2.imread(path)
             assert (img.shape[1], img.shape[0]) == (640, 360)
-        assert os.listdir(os.path.join(tmp, "debug")) == ["0409001429_warp.jpg"]
-
-        meta = os.path.join(tmp, "collect_meta.json")
-        assert os.path.exists(meta)
+        assert os.listdir(os.path.join(out, "debug")) == ["0409001429_warp.jpg"]
+        assert os.path.exists(os.path.join(out, "collect_meta.json"))
 
 
 def test_limit_does_not_mistake_skipped_scenes_for_orphans(bgr_image, capsys):
@@ -152,19 +180,15 @@ def test_limit_does_not_mistake_skipped_scenes_for_orphans(bgr_image, capsys):
     capture = _capture(cv2.resize(bgr_image, SIZE))
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/surface", "raw/distorted"):
-            os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        for sid in ("0409001429", "0409232547"):
-            cv2.imwrite(os.path.join(tmp, "raw", "surface", f"surface_{sid}.jpg"),
-                        capture)
-            cv2.imwrite(os.path.join(tmp, "raw", "distorted",
-                                     f"distorted_{sid}_0803120000_1000_0.jpg"), capture)
+        raw = _raw_set(tmp, {
+            sid: [f"distorted_{sid}_0803120000_1000_0.jpg"]
+            for sid in ("0409001429", "0409232547")}, capture)
+        out = os.path.join(tmp, "warp_0812")
 
-        assert collect.main(["warp", "--root", tmp, "--inset", "0",
-                             "--limit", "1", "--no-debug"]) == 0
+        assert warp.main(["--raw", raw, "--out", out, "--limit", "1"]) == 0
         assert "no surface shot" not in capsys.readouterr().out
 
-        with open(os.path.join(tmp, "collect_meta.json"), encoding="utf-8") as f:
+        with open(os.path.join(out, "collect_meta.json"), encoding="utf-8") as f:
             assert json.load(f)["warp"]["orphan_surface_ids"] == []
 
 
@@ -172,14 +196,11 @@ def test_captures_without_a_surface_shot_are_still_reported(bgr_image, capsys):
     capture = _capture(cv2.resize(bgr_image, SIZE))
 
     with tempfile.TemporaryDirectory() as tmp:
-        for sub in ("raw/surface", "raw/distorted"):
-            os.makedirs(os.path.join(tmp, sub), exist_ok=True)
-        cv2.imwrite(os.path.join(tmp, "raw", "surface", "surface_0409001429.jpg"),
-                    capture)
-        cv2.imwrite(os.path.join(tmp, "raw", "distorted",
-                                 "distorted_9999999999_0803120000_1000_0.jpg"), capture)
+        raw = _raw_set(tmp, {"0409001429": [
+            "distorted_9999999999_0803120000_1000_0.jpg"]}, capture)
+        out = os.path.join(tmp, "warp_0812")
 
-        assert collect.main(["warp", "--root", tmp, "--inset", "0", "--no-debug"]) == 0
+        assert warp.main(["--raw", raw, "--out", out]) == 0
         assert "9999999999" in capsys.readouterr().out
 
 

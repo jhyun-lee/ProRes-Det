@@ -8,17 +8,23 @@ clip goes out fullscreen on --screen at its own fps, the camera feed goes into a
 single mp4, and nothing else happens. Useful for capturing raw distorted footage
 before there are weights to run, or for proving a rig works end to end.
 
-    python data/record.py                        # BeamVideo -> data/recordings/rec_<t>.mp4
-    python data/record.py --screen 2 --seconds 30
-    python data/record.py --clip data/SampleData/sample_video/mIni_Video_1.mp4 --loop
-    python data/record.py --warp                 # record rectified frames, not raw ones
+    python Data.py record                        # test_light -> data/recordings/rec_<t>.mp4
+    python Data.py record --screen 2 --seconds 30
+    python Data.py record --clip data/live/train_light_1.mp4 --loop
+    python Data.py record --warp                 # record rectified frames, not raw ones
 
 Recording starts as soon as the window is up - no keypress. 'q' in the preview or
-the projector window stops early, as do the end of the clip, --seconds and
---max-frames.
+the projector window stops early, as do the end of the clip and --seconds.
 
-The mp4 lands next to a .json holding the clip, camera and monitor settings the run
-actually used, plus the measured capture rate.
+This stage stands outside the session folders the other four share: it produces one
+mp4, not the distorted/light/surface triplets a training set is made of, so there is
+nothing for `warp` or `train.py` to pick up. It is for proving a rig works and for
+grabbing raw footage before there are weights to run.
+
+The mp4 lands in record.out_dir next to a .json holding the clip, camera and monitor
+settings the run actually used, plus the measured capture rate. The codec, the fps
+probe length, the preview cadence and the encoder queue depth all come from
+`record:` in configs/collect.yaml.
 """
 
 import argparse
@@ -35,17 +41,34 @@ import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # for `common`
+
+from common import cfg, cfg_path, pick  # noqa: E402
 
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-DEFAULT_CLIP = os.path.join(DATA_DIR, "live", "BeamVideo.mp4")
-DEFAULT_BACKGROUND = os.path.join(DATA_DIR, "live", "BaseBackGround.jpg")
+LIVE_DIR = os.path.join(DATA_DIR, "live")
+DEFAULT_CLIP = os.path.join(LIVE_DIR, "test_light.mp4")
+DEFAULT_BACKGROUND = os.path.join(LIVE_DIR, "BaseBackGround.jpg")
 DEFAULT_OUT_DIR = os.path.join(DATA_DIR, "recordings")
 
 PREVIEW = "Recording_Preview"
 
-# Camera frames allowed to wait on the encoder. Deep enough to absorb a slow write,
-# shallow enough that a stalled encoder is reported as drops instead of eating RAM.
+# Fallbacks. The live values come from `record:` in configs/collect.yaml.
+#
+#   max_queued     camera frames allowed to wait on the encoder. Deep enough to
+#                  absorb a slow write, shallow enough that a stalled encoder is
+#                  reported as drops instead of eating RAM.
+#   codec          fourcc for the mp4. mp4v is the one OpenCV can be relied on to
+#                  have built in.
+#   fps_probe      frames measured before the header fps is fixed. They are
+#                  buffered, not dropped, so measuring costs no footage.
+#   preview_every  projected frames between preview refreshes. The preview is a
+#                  sanity check, not a monitor, and repainting it every frame steals
+#                  time from the projection loop.
 MAX_QUEUED = 32
+CODEC = "mp4v"
+FPS_PROBE = 24
+PREVIEW_EVERY = 5
 
 
 def shrink(img, size):
@@ -80,11 +103,11 @@ class Recorder:
     no footage.
     """
 
-    def __init__(self, path, codec="mp4v", fps=0.0, probe=24, transform=None):
+    def __init__(self, path, transform=None, codec=None, probe=None):
         self.path = path
-        self.codec = codec
-        self.fps = float(fps)
-        self.probe = max(2, int(probe))
+        self.codec = codec or cfg("record", "codec", default=CODEC)
+        self.fps = 0.0                 # 0 until the probe measures the real rate
+        self.probe = int(probe or cfg("record", "fps_probe", default=FPS_PROBE))
         self.transform = transform
         self.writer = None
         self.size = None
@@ -212,28 +235,22 @@ def encode_loop(recorder, frames, stop_event, stats):
             break
 
 
-def build_transform(matrix, warp_wh, out_size):
-    """Rectify (optional) then resize (optional), as one callable for the encoder."""
-    if matrix is None and out_size is None:
+def build_transform(matrix, warp_wh):
+    """Rectification, as one callable for the encoder. None when --warp was not given."""
+    if matrix is None:
         return None
-
-    def transform(frame):
-        if matrix is not None:
-            frame = cv2.warpPerspective(frame, matrix, warp_wh)
-        return shrink(frame, out_size)
-
-    return transform
+    return lambda frame: cv2.warpPerspective(frame, matrix, warp_wh)
 
 
-def calibrate(cam, background, manual, settle):
+def calibrate(cam, background, manual):
     """Four corners of the projected area, exactly as the live pipeline finds them."""
     from projector_distortion.pipeline.live import (
-        WINDOW, auto_calibrate, homography, manual_calibrate, warp_size,
+        CALIB_SETTLE, WINDOW, auto_calibrate, homography, manual_calibrate, warp_size,
     )
 
     points = None
     if not manual:
-        points = auto_calibrate(cam, background.shape, settle=settle)
+        points = auto_calibrate(cam, background.shape, settle=CALIB_SETTLE)
         cv2.imshow(WINDOW, background)
         cv2.waitKey(1)
         if points is None:
@@ -249,7 +266,9 @@ def calibrate(cam, background, manual, settle):
 
 
 def run(args):
-    from projector_distortion.pipeline.live import WINDOW, open_webcam, place_window
+    from projector_distortion.pipeline.live import (
+        CAM_FPS, CAM_HEIGHT, CAM_WIDTH, WINDOW, open_webcam, place_window,
+    )
 
     clip_path = under_root(args.clip)
     if not os.path.exists(clip_path):
@@ -274,8 +293,7 @@ def run(args):
 
     monitor = place_window(args.screen, background)
 
-    cam = open_webcam(args.camera, args.cam_backend, args.cam_width, args.cam_height,
-                      args.cam_fps)
+    cam = open_webcam(args.camera, args.cam_backend)
     if cam is None:
         clip.release()
         cv2.destroyAllWindows()
@@ -285,21 +303,14 @@ def run(args):
             f"app holding the camera.")
     cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+    preview_every = max(1, int(cfg("record", "preview_every", default=PREVIEW_EVERY)))
+
     points = matrix = warp_wh = None
     if args.warp:
-        points, matrix, warp_wh = calibrate(cam, background, args.manual_calib,
-                                            args.calib_settle)
-    out_size = None if 0 in args.rec_size else tuple(args.rec_size)
+        points, matrix, warp_wh = calibrate(cam, background, args.manual_calib)
 
-    if args.start_delay > 0:
-        print(f"starting in {args.start_delay:.1f}s ...", flush=True)
-        cv2.imshow(WINDOW, background)
-        cv2.waitKey(1)
-        time.sleep(args.start_delay)
-
-    recorder = Recorder(args.out, codec=args.codec, fps=args.fps, probe=args.fps_probe,
-                        transform=build_transform(matrix, warp_wh, out_size))
-    frames = queue.Queue(maxsize=MAX_QUEUED)
+    recorder = Recorder(args.out, transform=build_transform(matrix, warp_wh))
+    frames = queue.Queue(maxsize=int(cfg("record", "max_queued", default=MAX_QUEUED)))
     stop_event = threading.Event()
     latest = [None]
     stats = {"read": 0, "dropped": 0, "read_failed": False, "encoder_failed": False}
@@ -309,12 +320,11 @@ def run(args):
     encoder = threading.Thread(target=encode_loop, daemon=True,
                                args=(recorder, frames, stop_event, stats))
 
-    if args.preview:
-        cv2.namedWindow(PREVIEW, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(PREVIEW, 480, 360)
-        # The new window can steal focus and pull the projector window off its
-        # monitor on Windows; put it back before anything is projected.
-        place_window(args.screen, background, announce=False)
+    cv2.namedWindow(PREVIEW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(PREVIEW, 480, 360)
+    # The new window can steal focus and pull the projector window off its monitor on
+    # Windows; put it back before anything is projected.
+    place_window(args.screen, background, announce=False)
 
     print("recording - press 'q' to stop.", flush=True)
     grabber.start()
@@ -327,9 +337,6 @@ def run(args):
     reason = "clip ended"
     try:
         while not stop_event.is_set():
-            if args.max_frames and projected >= args.max_frames:
-                reason = f"reached --max-frames {args.max_frames}"
-                break
             if args.seconds and (time.time() - t0) >= args.seconds:
                 reason = f"reached --seconds {args.seconds}"
                 break
@@ -354,8 +361,7 @@ def run(args):
             cv2.imshow(WINDOW, pro_frame)
             projected += 1
 
-            if args.preview and latest[0] is not None \
-                    and projected % max(1, args.preview_every) == 0:
+            if latest[0] is not None and projected % preview_every == 0:
                 cv2.imshow(PREVIEW, shrink(latest[0], (480, 360)))
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 reason = "stopped by user"
@@ -390,14 +396,13 @@ def run(args):
                       "fps_projector": round(projected / elapsed, 2),
                       "monitor": dict(zip(monitor._fields, monitor)) if monitor else None},
         "camera": {"index": args.camera, "backend": args.cam_backend,
-                   "requested": [args.cam_width, args.cam_height, args.cam_fps],
+                   "requested": [CAM_WIDTH, CAM_HEIGHT, CAM_FPS],
                    "frames_read": stats["read"], "frames_dropped": stats["dropped"]},
         "warp": {"enabled": bool(args.warp),
                  "points_tl_tr_br_bl": [list(map(int, p)) for p in points]
                  if points else None,
                  "target": list(warp_wh) if warp_wh else None,
                  "homography": matrix.tolist() if matrix is not None else None},
-        "rec_size": list(out_size) if out_size else None,
     }
     meta_path = os.path.splitext(args.out)[0] + ".json"
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -424,66 +429,46 @@ def run(args):
 
 def build_parser():
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+        prog="Data.py record", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    p.add_argument("--clip", default=DEFAULT_CLIP, help="video to project")
-    p.add_argument("--background", default=DEFAULT_BACKGROUND,
-                   help="image shown before the clip starts")
-    p.add_argument("--out", default=None,
-                   help=f"output mp4 (default: {DEFAULT_OUT_DIR}/rec_<MMDDHHMMSS>.mp4)")
-    p.add_argument("--screen", type=int, default=1,
-                   help="monitor index for the fullscreen window (0 = primary; the "
-                        "table printed at startup lists them)")
-    p.add_argument("--loop", action="store_true",
-                   help="restart the clip instead of stopping at its end")
+    p.add_argument("--clip", default=None,
+                   help="video to project (default: record.clip in collect.yaml)")
+    p.add_argument("--screen", type=int, default=None,
+                   help="monitor index for the fullscreen window, 0 = primary "
+                        "(default: record.screen; `Data.py check` lists them)")
+    p.add_argument("--camera", type=int, default=None,
+                   help="webcam index (default: record.camera)")
     p.add_argument("--seconds", type=float, default=0.0,
                    help="stop after N seconds (0 = no limit)")
-    p.add_argument("--max-frames", type=int, default=0,
-                   help="stop after N projected frames (0 = no limit)")
-    p.add_argument("--start-delay", type=float, default=0.0,
-                   help="seconds to hold the background before recording starts")
-
-    rec = p.add_argument_group("recording")
-    rec.add_argument("--fps", type=float, default=0.0,
-                     help="mp4 header fps (0 = measure the camera's real rate)")
-    rec.add_argument("--fps-probe", type=int, default=24,
-                     help="frames used to measure the rate; they are buffered, "
-                          "not dropped")
-    rec.add_argument("--codec", default="mp4v", help="fourcc, e.g. mp4v, avc1, XVID")
-    rec.add_argument("--rec-size", type=int, nargs=2, default=[0, 0], metavar=("W", "H"),
-                     help="resize before encoding (0 0 keeps the camera resolution)")
-    rec.add_argument("--warp", action="store_true",
-                     help="calibrate once and record the rectified screen instead of "
-                          "the raw camera frame")
-    rec.add_argument("--manual-calib", action="store_true",
-                     help="with --warp: click the 4 corners instead of auto-detecting")
-    rec.add_argument("--calib-settle", type=float, default=0.8,
-                     help="seconds to wait after each calibration flash")
-    rec.add_argument("--no-preview", dest="preview", action="store_false",
-                     help="skip the small camera preview window")
-    rec.add_argument("--preview-every", type=int, default=5,
-                     help="refresh the preview every N projected frames")
-
-    cam = p.add_argument_group("camera")
-    cam.add_argument("--camera", type=int, default=0, help="webcam index")
-    cam.add_argument("--cam-width", type=int, default=1280)
-    cam.add_argument("--cam-height", type=int, default=960)
-    cam.add_argument("--cam-fps", type=int, default=30)
-    cam.add_argument("--cam-backend", default="auto",
-                     choices=["auto", "any", "dshow", "msmf", "v4l2"])
-
-    p.set_defaults(preview=True)
+    p.add_argument("--loop", action="store_true",
+                   help="restart the clip instead of stopping at its end")
+    p.add_argument("--warp", action="store_true",
+                   help="calibrate once and record the rectified screen instead of "
+                        "the raw camera frame")
+    p.add_argument("--out", default=None,
+                   help="output mp4 (default: record.out_dir/rec_<MMDDHHMMSS>.mp4)")
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+
+    # Everything the rig fixes once rather than per run: the background, the camera
+    # backend, the output folder. --clip / --screen / --camera still win when given.
+    args.clip = under_root(args.clip) if args.clip else \
+        cfg_path("record", "clip", default=DEFAULT_CLIP)
+    args.background = cfg_path("record", "background", default=DEFAULT_BACKGROUND)
+    args.screen = pick(args.screen, "record", "screen", default=1)
+    args.camera = pick(args.camera, "record", "camera", default=0)
+    args.cam_backend = cfg("record", "cam_backend", default="auto")
+    args.manual_calib = False
+
+    out_dir = cfg_path("record", "out_dir", default=DEFAULT_OUT_DIR) or DEFAULT_OUT_DIR
     if not args.out:
-        args.out = os.path.join(DEFAULT_OUT_DIR,
+        args.out = os.path.join(out_dir,
                                 f"rec_{datetime.now().strftime('%m%d%H%M%S')}.mp4")
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-    if len(args.codec) != 4:
-        raise SystemExit(f"--codec must be a 4-character fourcc, got '{args.codec}'")
     return run(args)
 
 

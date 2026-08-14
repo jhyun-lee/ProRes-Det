@@ -5,8 +5,14 @@ import numpy as np
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-BOX_COLOR = (0, 255, 0)
-TEXT_COLOR = (0, 0, 255)
+# Detections: a red box with the class name on a filled white tab above it. The tab
+# is what keeps the name readable over a bright projection, where plain text is not.
+BOX_COLOR = (0, 0, 255)
+LABEL_BG = (255, 255, 255)
+LABEL_TEXT = (0, 0, 0)
+LABEL_SCALE = 0.5
+LABEL_WEIGHT = 1
+LABEL_PAD = 3
 
 CORNER_TAGS = ("TL", "TR", "BR", "BL")
 _CORNER_COLORS = ((0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 128, 0))
@@ -23,14 +29,36 @@ PANEL_FONT_SCALE = 0.55
 WARP_ARROW_W = 80
 
 
-def draw_detections(img, detections, color=BOX_COLOR, text_color=TEXT_COLOR,
-                    thickness=2) -> np.ndarray:
-    """Draws in place and returns the image; pass a copy to keep a clean original."""
+def draw_detections(img, detections, color=BOX_COLOR, thickness=2,
+                    scale=LABEL_SCALE) -> np.ndarray:
+    """
+    One box per detection, class name on a filled tab centred above it.
+
+    Only what the detector found is drawn; ground truth is never overlaid, so the
+    annotated view stays a picture of the prediction alone. Confidence is left out
+    of the label to keep it short - every score is in detections.csv.
+
+    Draws in place and returns the image; pass a copy to keep a clean original.
+    """
+    h, w = img.shape[:2]
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.box)
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
-        cv2.putText(img, f"{d.name} {d.conf:.2f}", (x1, max(y1 - 8, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
+
+        (text_w, text_h), baseline = cv2.getTextSize(d.name, FONT, scale, LABEL_WEIGHT)
+        tab_w = text_w + LABEL_PAD * 2
+        tab_h = text_h + baseline + LABEL_PAD * 2
+
+        # Centred on the box, then pulled back inside the frame. A name wider than
+        # its own box is normal, and a box against an edge must not push its label
+        # off-image; a box near the top gets its label below the edge instead.
+        x = min(max(x1 + (x2 - x1 - tab_w) // 2, 0), max(w - tab_w, 0))
+        y = y1 - tab_h if y1 - tab_h >= 0 else y1
+        y = min(y, max(h - tab_h, 0))
+
+        cv2.rectangle(img, (x, y), (x + tab_w, y + tab_h), LABEL_BG, -1)
+        cv2.putText(img, d.name, (x + LABEL_PAD, y + LABEL_PAD + text_h),
+                    FONT, scale, LABEL_TEXT, LABEL_WEIGHT, cv2.LINE_AA)
     return img
 
 
@@ -109,7 +137,9 @@ def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.nda
     captions. `points` draws the calibration quad on the left tile, which is what
     makes a mis-ordered or drifted warp obvious.
     """
-    left = draw_quad(pre, points) if points else pre.copy()
+    # Length, not truthiness: `points` is routinely a numpy (4, 2), and testing an
+    # array for truth raises rather than being falsy.
+    left = draw_quad(pre, points) if points is not None and len(points) else pre.copy()
     right = post.copy()
     if labels is None:
         labels = (f"(a) pre-warp camera {pre.shape[1]}x{pre.shape[0]}",

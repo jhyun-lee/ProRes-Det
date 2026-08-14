@@ -1,10 +1,17 @@
-# Detection backend defaults.
+# Detection settings. This file is the only place they are set - no CLI flag
+# overrides any of it.
 #
-# `backend` picks which wrapper runs; `weights` per backend is resolved relative to the
-# project root. CLI flags (--detector, --det-weights, --conf) override anything here.
+# `backend` picks which wrapper runs; `weights` per backend is resolved relative to
+# the project root.
 
 detector:
-  backend: yolo           # yolo | ssd | none
+  # yolo | ssd | none, or anything registered with @register_detector.
+  #
+  # A list scores one row per backend in evaluate.py's report:
+  #     backend: [yolo, ssd]
+  # Each entry loads its own weights entry below. demo.py detects with one model, so
+  # it takes the first name in the list.
+  backend: yolo
   conf: 0.25
   imgsz: null             # YOLO inference size; null keeps the checkpoint's own
   # Box filter applied to both the captured and the restored pass.

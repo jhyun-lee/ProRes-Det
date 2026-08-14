@@ -128,7 +128,9 @@ def place_fullscreen(window, screen_index, image=None,
         print(f"{len(monitors)} monitor(s) detected:")
         for i, m in enumerate(monitors):
             star = " (primary)" if m.primary else ""
-            print(f"      --screen {i} -> {m.width}x{m.height} at ({m.x},{m.y})"
+            # Just the index: demo.py --live takes it from rig.screen in live.yaml,
+            # the data scripts from capture.screen / --screen.
+            print(f"      screen {i} -> {m.width}x{m.height} at ({m.x},{m.y})"
                   f"{star}  {m.name}")
 
     if not 0 <= screen_index < len(monitors):

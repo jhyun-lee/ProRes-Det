@@ -45,15 +45,6 @@ KIND_DIRS = {"distorted": "captures", "restored": "captures", "panel": "frames_a
 JPEG_QUALITY = 92
 
 
-def parse_kinds(text):
-    """'restored,panel' -> ('restored', 'panel'); raises on an unknown name."""
-    kinds = [k.strip() for k in str(text).split(",") if k.strip()]
-    unknown = [k for k in kinds if k not in FRAME_KINDS]
-    if unknown:
-        raise ValueError(f"unknown image kinds {unknown}; choose from {list(FRAME_KINDS)}")
-    return tuple(kinds)
-
-
 class RunRecorder:
     """Use as a context manager so csv handles and the video writer always close."""
 

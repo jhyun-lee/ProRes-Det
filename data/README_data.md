@@ -1,7 +1,7 @@
 # data/
 
 Everything about the dataset: what ships, how filenames tie the views together, the label
-format, and the two tools that build more of it.
+format, and the tools that build more of it.
 
 Script options for `demo.py` / `evaluate.py` / `train.py` are in
 [README_running.md](../README_running.md).
@@ -11,8 +11,8 @@ Script options for `demo.py` / `evaluate.py` / `train.py` are in
 - [Filename convention](#filename-convention)
 - [Layouts](#layouts)
 - [Label format](#label-format)
-- [`collect.py` — build a dataset with the rig](#collectpy--build-a-dataset-with-the-rig)
-- [`record.py` — project and record, no models](#recordpy--project-and-record-no-models)
+- [`Data.py` — build a dataset with the rig](#datapy--build-a-dataset-with-the-rig)
+- [`Data.py record` — project and record, no models](#datapy-record--project-and-record-no-models)
 - [Swapping in real data](#swapping-in-real-data)
 
 ---
@@ -24,8 +24,12 @@ git, so it is there right after a clone.
 
 ```
 data/
-├── collect.py              build your own dataset with a projector and a webcam
+├── check.py                list the displays, preview the webcam
+├── make_light.py           video -> the light frames a projector will throw
+├── capture.py              projector + webcam -> raw captures
+├── warp.py                 raw captures -> rectified, aligned pairs
 ├── record.py               project a clip and record the camera's view (no models)
+├── common.py               collect.yaml access, session folders, shared helpers
 ├── SampleData/             the dataset, split for train / validation / test
 │   ├── sample_train/       what train.py fits on          180 MiB
 │   │   ├── distorted/  1,000 files, 640×360
@@ -41,14 +45,21 @@ data/
 │   │   ├── light/        198 files, 854×480
 │   │   ├── surface/        5 files, 640×360
 │   │   └── labels/         7 files, LabelMe json, 53 boxes over those 5 scenes
-│   └── sample_video/       two short clips, an alternative to BeamVideo    23 MiB
-│                           4,262 and 5,381 frames @30fps, 854×480 / 856×480
-├── live/                   input for demo.py --live and record.py
-│   ├── BeamVideo.mp4       clip to play through the projector
+├── live/                   the projection sources, split by role       121 MiB
+│   ├── train_light_1.mp4   what `Data.py make_light` turns into training light frames
+│   │                       4,262 frames @30fps = 2.4 min, 854×480, 15 MiB
+│   ├── train_light_2.mp4   5,381 frames @30fps = 3.0 min, 856×480, 7 MiB
+│   ├── train_light_3.mp4  24,272 frames @30fps = 13.5 min, 854×480, 44 MiB
+│   ├── test_light.mp4      held out — demo.py --live and `Data.py record` default to it
 │   │                       5,858 frames @30fps = 3.3 min, 854×480, 55 MiB
 │   └── BaseBackGround.jpg  background shown during calibration, 1280×960
-└── recordings/             where record.py writes (git-ignored)
+├── Create_Data/            where a collection session lands (git-ignored)
+└── recordings/             where `Data.py record` writes (git-ignored)
 ```
+
+`Data.py` at the repo root is the entry point for the five stage scripts above
+(`common.py` is shared plumbing, not a stage). They are standalone programs, not a
+package, so each is runnable on its own too.
 
 | Path | Used as |
 |---|---|
@@ -65,8 +76,22 @@ Image sizes need not match. Everything is resized to the model's `input_size` (6
 default), which is why `light/` mixes 1280×720, 854×480 and 856×480 with no special
 handling.
 
-`data/` is 305 MiB tracked. `live/BeamVideo.mp4` (55 MiB) and `SampleData/sample_video/`
-(23 MiB) are only needed by `--live` and `record.py`; delete them if you use neither.
+### The projection sources are split too
+
+`live/` holds the clips a projector plays, and the split runs through them as well:
+
+| Clip | Feeds | Used by |
+|---|---|---|
+| `train_light_1.mp4` · `_2` · `_3` | the training split | `Data.py make_light` defaults to all three |
+| `test_light.mp4` | the held-out split | `demo.py --live` and `Data.py record` default to it |
+
+Keeping them apart is what makes the held-out split honest: a set collected with
+`Data.py` shares no projected frame with `test_light.mp4`, so a checkpoint fitted on it
+has never seen the light it is scored against. `--src` and `--clip` override either side.
+
+`data/` is 349 MiB tracked, and 121 MiB of that is `live/`. The clips are only needed to
+*collect* or to run `--live` — the frames they produce already sit in `SampleData/*/light/`,
+so training and evaluation run without them. Delete them if you need neither.
 
 ---
 
@@ -204,124 +229,267 @@ If both `surface_<id>.txt` and `surface_<id>.json` exist for one scene, the `.tx
 
 ---
 
-## `collect.py` — build a dataset with the rig
+## `Data.py` — build a dataset with the rig
 
-The sample set above was made this way. Four stages, in order. `check` and `capture` drive
-the projector and the webcam; `light` and `warp` are plain file work and run anywhere.
-
-```bash
-python data/collect.py check                                  # monitors + webcam
-python data/collect.py light   --src data/live/BeamVideo.mp4  # video -> light frames
-python data/collect.py capture --screen 2 --rounds 3          # project and shoot
-python data/collect.py warp                                   # rectify into pairs
-```
-
-Everything lands in one session folder, already in the layout the rest of the repo reads.
-`--root` moves it; the default is one folder per day, so a second run of a stage extends
-the first.
-
-```
-data/collected_<MMDD>/
-├── light/      light_<lightId>.jpg                    [light]    what the projector emits
-├── raw/        surface/surface_<surfaceId>.jpg        [capture]  camera frames, unrectified
-│               distorted/distorted_<surfaceId>_<lightId>.jpg     [capture]
-├── surface/    surface_<surfaceId>.jpg                [warp]     rectified, 640×360
-├── distorted/  distorted_<surfaceId>_<lightId>.jpg    [warp]     rectified, 640×360
-├── debug/      <surfaceId>_warp.jpg                   [warp]     before/after evidence
-└── collect_meta.json                                  every stage's settings and counts
-```
+The sample set above was made this way. `Data.py` at the repo root dispatches to the
+scripts under `data/`, and every stage keeps its own `--help`:
 
 ```bash
-python demo.py  --input data/collected_0803
-python train.py --data-root data/collected_0803
+python Data.py                     # list the stages
+python Data.py capture --help      # that stage's options
 ```
 
-### Camera flags
+| Stage | Script | Does | Needs the rig |
+|---|---|---|---|
+| `check` | `check.py` | List the displays, preview the webcam | yes |
+| `make_light` | `make_light.py` | Video → light frames | no |
+| `capture` | `capture.py` | Project and shoot → raw captures | yes |
+| `capture_warp` | `capture.py --warp` | The same, rectifying as it shoots | yes |
+| `warp` | `warp.py` | Raw captures → aligned pairs | no |
+| `record` | `record.py` | Project a clip and record it, no models | yes |
 
-`check` and `capture` share these.
+`make_light` and `warp` are plain file work, so a session can be shot on the rig machine
+and rectified anywhere else. Running a script directly is equivalent —
+`python data/warp.py --review` and `python Data.py warp --review` are the same program.
 
-| Option | Default |
+```bash
+python Data.py check                       # monitors + webcam
+python Data.py make_light                  # video -> light frames
+python Data.py capture_warp --screen 2     # shoot 10 scenes, rectify as it goes
+```
+
+Or keep the two halves apart, which is what leaves the geometry redoable later:
+
+```bash
+python Data.py capture --screen 2
+python Data.py warp
+```
+
+`make_light` reads the three `train_light_*.mp4` clips by default. `test_light.mp4` is
+left out on purpose, so a set collected here shares no projected frame with the held-out
+split.
+
+Extracting the light frames is a separate stage on purpose — `capture` never extracts
+anything itself, it only samples what is already in `projected/`. There is no cache and no
+"already done" check: every run stamps a fresh timestamp into the filenames, so running
+`make_light` twice over one clip writes a second copy of every frame rather than skipping
+it.
+
+### Where it lands
+
+Everything goes under `session.dir` in
+[configs/collect.yaml](../projector_distortion/configs/collect.yaml) — `data/Create_Data`
+by default, and git-ignored:
+
+```
+data/Create_Data/
+├── projected/       light_<lightId>.jpg                 [make_light] what the projector emits
+├── raw_<MMDD>/      surface/surface_<surfaceId>.jpg     [capture]    camera frames, unrectified
+│                    distorted/distorted_<surfaceId>_<lightId>.jpg
+│                    collect_meta.json                                settings, counts, corners
+└── warp_<MMDD>/     surface/surface_<surfaceId>.jpg     [warp]       rectified, 640×360
+                     distorted/distorted_<surfaceId>_<lightId>.jpg
+                     debug/<surfaceId>_warp.jpg                       before/after evidence
+                     collect_meta.json
+```
+
+`projected/` is deliberately not dated: the frames a clip yields are the same on any day,
+so a per-day copy would cost disk and buy nothing. The captures are dated, because a rig
+gets moved and a scene gets rebuilt between days.
+
+A warp folder is named after the raw it came from, not after the day `warp` ran, so
+`raw_0813` and `warp_0813` describe the same captures however long the gap. `capture`
+fills today's raw; `warp` takes the newest raw unless `--raw` names another.
+
+`warp_<MMDD>/` is a `flat` layout carrying the current filenames, so nothing needs
+converting:
+
+```bash
+python demo.py  --input data/Create_Data/warp_0813
+python train.py --data-root data/Create_Data/warp_0813
+```
+
+### Settings that are not flags
+
+Only what genuinely changes between runs stayed on the command line. Resolutions, the
+camera backend, the hue bands, the warp geometry and the codec are properties of the rig
+or of the naming convention, so they are set once in
+[configs/collect.yaml](../projector_distortion/configs/collect.yaml):
+
+| Block | Owns |
 |---|---|
-| `--camera N` | `0` |
-| `--cam-width` · `--cam-height` | `1280` · `960` |
-| `--cam-fps` | `30` |
-| `--cam-backend` | `auto` · `any` · `dshow` · `msmf` · `v4l2` |
+| `session:` | `dir`, the `projected` / `raw_` / `warp_` names, `jpeg_quality` (95) |
+| `light:` | `src`, `step`, `augment`, `size` (1280×720), `hue_bands`, `first_video_index`, `seed` |
+| `capture:` | `screen`, `camera`, `cam_backend`, `background`, `rounds`, `limit`, `settle_ms`, `flush`, `round_settle`, `preview_every`, `seed` |
+| `warp:` | `mode`, `work_size` (1280×720), `final_size` (640×360), `points` (20), `inset` (2), `debug` |
+| `record:` | `clip`, `out_dir`, `screen`, `camera`, `cam_backend`, `background`, `codec`, `fps_probe`, `preview_every`, `max_queued` |
+
+It is a second config file rather than a section of `live.yaml` because these scripts run
+without torch and never import the pipeline package.
+
+The requested camera resolution and rate are the exception, fixed at 1280×960 @30fps —
+`CAM_WIDTH` / `CAM_HEIGHT` / `CAM_FPS` in `projector_distortion/pipeline/live.py`, shared
+with `demo.py --live`. Drivers frequently ignore the request, so what the camera actually
+opened at is printed at startup and stored in `collect_meta.json`.
+
+### How often the scene has to change
+
+`capture` takes one `surface` shot per **round**, so the objects on the screen change once
+per round — `--rounds` is how many scenes you will be asked to build.
+
+Each round draws `--limit` light frames at random from the whole `projected/` folder, so
+ten rounds are lit by ten different draws rather than by one list ten times. The defaults
+are `--rounds 10 --limit 50` = **500 pairs over 10 scenes**.
+
+Nothing is on a clock. The surface shot blocks until you press `s`, so take as long as the
+scene needs; the numbers below are only the automatic part that follows.
+
+| Command | Scenes | Shots per scene | Pairs | Shooting per round |
+|---|---|---|---|---|
+| `capture` (defaults) | 10 | 50 | **500** | ~1 min |
+| `capture --rounds 20 --limit 25` | 20 | 25 | 500 | ~30 s |
+| `capture --rounds 4 --limit 250` | 4 | 250 | 1,000 | ~5 min |
+
+"Shooting per round" is the capture loop alone, at the default `capture.settle_ms` of
+1200 ms per frame; the run prints its own estimate before it starts. Building the scene is
+yours and is not counted.
+
+`--limit 0` means *every* frame in the pool, which after a default `make_light` is
+thousands — one scene, hours of shooting, and the least scene variety a session can have.
+That is the wrong trade for restoration: the model needs many surfaces, not many lights on
+one surface.
+
+Sampling is unseeded, so running two sessions on different days accumulates variety
+instead of repeating a draw. Set `capture.seed` in `collect.yaml` to make one reproducible.
 
 ### `check`
 
 Lists the displays and opens the webcam, so `capture` is not the first attempt.
+
+| Option | Default |
+|---|---|
+| `--camera N` | `capture.camera` |
 
 ```
   --screen 0 -> 2560x1440 at (0,0) (primary)  \\.\DISPLAY1
   --screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
 ```
 
-### `light` — video → light frames
+### `make_light` — video → light frames
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--src <path>` | `data/live/BeamVideo.mp4` | Video file, or a folder of them |
-| `--out <dir>` | `<root>/light` | — |
-| `--step N` | `30` | Keep every Nth frame. 30 = one per second at 30fps |
-| `--size W H` | `1280 720` | `0 0` keeps the source resolution |
-| `--quality N` | `95` | JPEG quality |
-| `--limit N` | `0` | At most N frames per video |
-| `--video-index N` | `1000` | The first video's index in the filename |
+| `--src <path>...` | `light.src` — the three `train_light_*.mp4` | Any mix of video files and folders of them |
+| `--out <dir>` | `<session.dir>/projected` | — |
+| `--step N` | `light.step` (`30`) | Keep every Nth frame. 30 = one per second at 30fps |
+| `--augment <mode>` | `light.augment` (`full`) | Copies per source frame: `full` = original + inverted + 4 hue rotations (6×), `invert` = 2×, `none` = 1× |
+| `--limit N` | `0` | At most N *source* frames per video, before augmentation |
+
+Written as `light_<tag>_<videoIdx>_<frameIdx>_<variant>.jpg`, where `variant` is `0`,
+`invert` or the hue angle. The folder is `projected/` but the files stay `light_*`:
+`projected_` is already the pre-rename prefix for *distorted* files, so a light frame
+named that way would parse as a distorted one.
+
+Frames are saved at `light.size` (1280×720) and `session.jpeg_quality` (95), with the
+first video numbered `light.first_video_index` (`1000`). `warp` downscales again to the
+model's input size, so this only has to sit comfortably above it. Set `light.seed` to fix
+the hue angles for a reproducible run.
 
 ### `capture` — projector + webcam → raw captures
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--screen N` | `1` | Monitor the projector is attached to. `check` prints the table |
-| `--light <dir>` | `<root>/light` | — |
-| `--background <path>` | `data/live/BaseBackGround.jpg` | Projected while the surface shot is taken |
-| `--rounds N` | `1` | Scene setups; each starts with a fresh surface shot |
-| `--limit N` | `0` | Light frames per round |
-| `--shuffle` | off | Random light order, so a short round still spans the clip |
-| `--seed N` | `42` | For `--shuffle` |
-| `--settle-ms N` | `150` | Wait after showing a frame before capturing it |
-| `--flush N` | `3` | Buffered camera frames to drop before each capture |
-| `--round-settle F` | `2.0` | Seconds between the surface shot and the first projection |
-| `--preview-every N` | `10` | Refresh the capture preview every N frames |
-| `--jpeg-quality N` | `95` | — |
+| `--raw <dir>` | `<session.dir>/raw_<MMDD>`, today's | Add to a specific capture folder instead |
+| `--screen N` | `capture.screen` (`1`) | Monitor the projector is attached to. `check` prints the table |
+| `--camera N` | `capture.camera` (`0`) | — |
+| `--rounds N` | `capture.rounds` (`10`) | Scene setups; each starts with a fresh surface shot |
+| `--limit N` | `capture.limit` (`50`) | Light frames drawn per round, at random from the whole pool. `0` uses every frame |
+| `--settle-ms N` | `capture.settle_ms` (`1200`) | How long a light frame is held before its capture is kept |
+| `--warp` | off | Also rectify as you shoot. `Data.py capture_warp` is this flag |
 
 **How a round works.** `capture` projects the background and waits for you to press `s`.
 That shot becomes `surface` — the scene with nothing projected on it, so place the objects
 and step out of frame first. Its timestamp becomes the `surfaceId`, and every capture of
 that round carries it. That is how many `distorted` files end up pointing at one
-`surface`. Then each light frame is projected once and captured once. `--rounds N`
-repeats with a new scene.
+`surface`. Then each light frame is projected once and captured once. `--rounds N` repeats
+with a new scene.
 
-**Timing.** `--settle-ms` and `--flush` are what keep a capture matched to the frame that
-caused it. If `distorted` looks like the *previous* light frame, raise both.
+**The framing preview.** While you are arranging the scene, the screen boundary is
+detected live and the rectified view is shown beside the camera one, so a warp that will
+not resolve gets fixed at the rig instead of at the warp stage with the scene long since
+dismantled.
+
+| Key | Does |
+|---|---|
+| `s` · `enter` · `space` | Take the surface shot and start the round |
+| `c` | Freeze the frame and click the 4 corners yourself, when detection cannot find them |
+| `r` | Drop the clicked corners, go back to auto-detection |
+| `q` · `esc` | Abort |
+
+Whatever corners are in force when `s` is pressed are written into `collect_meta.json`,
+and `warp` reuses them instead of detecting again — they were measured with someone
+watching the rectified preview, which is the one moment anybody can tell a good boundary
+from a bad one. `warp --redetect` ignores them.
+
+**Timing.** `capture.settle_ms` (1200 ms) and `capture.flush` (3) are what keep a capture
+matched to the frame that caused it. The camera is read for the whole settle window rather
+than slept through: a webcam hands back whatever it has queued, and auto-exposure only
+adjusts on frames the driver actually delivers. Consecutive light frames are inverted or
+hue-rotated copies of each other, so almost every step is a large brightness swing and an
+AE loop needs the better part of a second. If `distorted` looks like the *previous* light
+frame, raise `settle_ms`.
+
+**`capture_warp`.** With `--warp`, one rectifier is built per round from the corners on
+screen at the surface shot, and the rectified `surface/`, `distorted/` and `debug/` are
+written into `warp_<MMDD>/` alongside the raw. The raw is kept either way, so a round that
+came out wrong can still be redone with `Data.py warp --review` without going back to the
+rig. A round whose corners are unusable is captured raw only and reported as such.
 
 ### `warp` — rectify into aligned pairs
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--warp boundary` | default | 4 corners + the measured edge bow |
-| `--warp homography` | — | Corners only. For a flat screen with a clean boundary |
-| `--warp tps` | — | The legacy thin-plate spline. Needs `opencv-python<5` |
-| `--surface <dir>` · `--distorted <dir>` | `<root>/raw/surface` · `<root>/raw/distorted` | — |
-| `--points N` | `20` | Boundary correspondences (tps and the debug overlay) |
-| `--inset N` | `2` | Pixels to pull the boundary in, off the bright projection rim |
-| `--work-size W H` | `1280 720` | Rectification resolution |
-| `--final-size W H` | `640 360` | Saved resolution — the model input |
+| `--raw <dir>` | the newest `raw_<MMDD>` | Captures to rectify |
+| `--out <dir>` | `<session.dir>/warp_<MMDD>`, named after the raw | — |
+| `--mode boundary` | `warp.mode` (default) | 4 corners + the measured edge bow |
+| `--mode homography` | — | Corners only. For a flat screen with a clean boundary |
+| `--mode tps` | — | The legacy thin-plate spline. Needs `opencv-python<5` |
 | `--limit N` | `0` | Process at most N scenes |
-| `--no-debug` | off | Skip the before/after overlays in `<root>/debug/` |
+| `--review` | off | Show every scene and wait for a verdict |
+| `--manual` | off | Skip auto-detection, click the corners on every scene |
+| `--redetect` | off | Ignore the corners `capture` recorded and detect again |
+
+Rectification runs at `warp.work_size` (1280×720) with `warp.points` (20) boundary
+correspondences and the boundary pulled `warp.inset` (2) px in off the bright projection
+rim, then saves at `warp.final_size` (640×360).
 
 **Why it exists.** In the camera the screen is a trapezoid and the objects sit at a
-different scale in every capture, so nothing before this stage is trainable. `warp` finds
-the screen boundary in the surface shot, then rectifies that scene's surface frame *and*
-all its captures with the identical mapping. The pair ends up sharing a pixel grid, and
-the only difference left is the projected light.
+different scale in every capture, so nothing before this stage is trainable — and a
+session that only has `raw_<MMDD>/` is not a layout the loaders recognise at all. `warp`
+finds the screen boundary in the surface shot, then rectifies that scene's surface frame
+*and* all its captures with the identical mapping. The pair ends up sharing a pixel grid,
+and the only difference left is the projected light.
 
 `boundary` is exact for a flat screen seen off-axis and still right when the edges bow.
 OpenCV 5 removed the shape module, which is what `tps` needs.
 
-Check `<session>/debug/<surfaceId>_warp.jpg` on a short trial session before committing to a
-long one. It shows the detected boundary, the sampled points and the rectified result
-together.
+**`--review`.** Boundary detection is a contour heuristic on a photograph: right most of
+the time, and wrong in ways the summary line cannot show. `--review` puts each scene on
+screen — the detected quad next to the rectified result — and waits:
+
+| Key | Does |
+|---|---|
+| `enter` · `space` · `a` | Accept this scene |
+| `m` | Click the 4 corners by hand instead |
+| `r` | Re-run the detector |
+| `s` | Skip this scene |
+| `A` | Accept this and every scene after it, no more prompts |
+| `q` | Stop; the scenes already written are kept |
+
+Without `--review`, a scene whose boundary cannot be found is reported and skipped.
+Either way, check `warp_<MMDD>/debug/<surfaceId>_warp.jpg` on a short trial session before
+committing to a long one — it shows the detected boundary, the sampled points and the
+rectified result together.
 
 ### Labels are not collected
 
@@ -331,53 +499,49 @@ training and PSNR/SSIM need no labels, which is why `sample_train` ships without
 
 ---
 
-## `record.py` — project and record, no models
+## `Data.py record` — project and record, no models
 
-`collect.py` builds a *dataset*: still pairs, rectified and id-matched. `record.py` builds
+The other stages build a *dataset*: still pairs, rectified and id-matched. `record` builds
 a *video*. It projects a clip at its own fps and records the camera's view as one mp4.
 No restoration, no detection, no weights loaded — so it runs on a machine that has none.
 
-Use it to capture raw distorted footage before there is a checkpoint, or to prove a rig
-works end to end.
+It stands outside the session folders the other stages share: one mp4 is not the
+distorted/light/surface triplets a training set is made of, so there is nothing for `warp`
+or `train.py` to pick up. Use it to capture raw distorted footage before there is a
+checkpoint, or to prove a rig works end to end.
 
 | | Default | Change it with |
 |---|---|---|
-| Projected clip | `data/live/BeamVideo.mp4` | `--clip <path>` |
-| Background | `data/live/BaseBackGround.jpg` | `--background <path>` |
-| Output | `data/recordings/rec_<MMDDHHMMSS>.mp4` + a `.json` beside it | `--out <path>` |
+| Projected clip | `record.clip` — `data/live/test_light.mp4` | `--clip <path>` |
+| Background | `record.background` — `data/live/BaseBackGround.jpg` | `collect.yaml` |
+| Output | `record.out_dir/rec_<MMDDHHMMSS>.mp4` + a `.json` beside it | `--out <path>` |
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--screen N` | `1` | Monitor the projector is attached to. `0` = primary |
+| `--screen N` | `record.screen` (`1`) | Monitor the projector is attached to. `0` = primary |
+| `--camera N` | `record.camera` (`0`) | — |
 | `--loop` | off | Restart the clip instead of stopping at its end |
 | `--seconds F` | `0` | Stop after N seconds. `0` = no limit |
-| `--max-frames N` | `0` | Stop after N projected frames |
-| `--start-delay F` | `0` | Hold the background this long before recording starts |
-| `--fps F` | `0` | mp4 header fps. `0` = measure the camera's real rate |
-| `--fps-probe N` | `24` | Frames used to measure the rate. Buffered, not dropped |
-| `--codec <fourcc>` | `mp4v` | `avc1`, `XVID`, … |
-| `--rec-size W H` | `0 0` | Resize before encoding. `0 0` keeps the camera resolution |
 | `--warp` | off | Calibrate once and record the rectified screen |
-| `--manual-calib` | off | With `--warp`: click the 4 corners |
-| `--calib-settle F` | `0.8` | Seconds to wait after each calibration flash |
-| `--no-preview` | off | Skip the small camera preview window |
-| `--preview-every N` | `5` | Refresh the preview every N projected frames |
 
-Camera flags are the same as `collect.py`'s.
+The mp4 is `record.codec` (`mp4v`) at the camera's own resolution, the rate is measured
+over `record.fps_probe` (24) frames, the preview refreshes every `record.preview_every`
+(5) projected frames, and `record.max_queued` (32) camera frames may wait on the encoder.
 
 ```bash
-python data/record.py --screen 2 --seconds 30
-python data/record.py --clip data/SampleData/sample_video/mIni_Video_1.mp4 --loop
-python data/record.py --warp --rec-size 640 360
+python Data.py record --screen 2 --seconds 30
+python Data.py record --clip data/live/train_light_1.mp4 --loop
+python Data.py record --warp
 ```
 
 Recording starts as soon as the window is up — no keypress. `q` stops early, as do the end
-of the clip, `--seconds` and `--max-frames`.
+of the clip and `--seconds`.
 
-The header fps is **measured**, not requested. Webcams routinely deliver something other
-than what they were asked for and report a third number, and a wrong header is exactly
-what makes a recording play back in fast or slow motion. The probe frames are buffered
-until the rate is known, so measuring costs no footage.
+The header fps is **measured**, not requested — there is no flag to set it, on purpose.
+Webcams routinely deliver something other than what they were asked for and report a
+third number, and a wrong header is exactly what makes a recording play back in fast or
+slow motion. The probe frames are buffered until the rate is known, so measuring costs no
+footage.
 
 The `.json` beside the mp4 records the clip, camera and monitor settings the run actually
 used, plus the measured rate and how many frames the encoder dropped.

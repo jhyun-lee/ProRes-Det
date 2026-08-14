@@ -40,7 +40,8 @@ class RestorationConfig:
 
     Turning a `use_*` flag off and retraining measures that component's
     contribution. The config travels inside the checkpoint, so inference never has
-    to guess which variant produced the weights. TOGGLE_HELP describes each flag.
+    to guess which variant produced the weights. Set them under `ablation:` in
+    configs/restoration.yaml, which documents what each one switches off.
     """
 
     use_prenorm: bool = True
@@ -83,85 +84,35 @@ class RestorationConfig:
 
     def tag(self) -> str:
         """'FULL' when nothing is ablated, else e.g. 'NoCA-NoSkip3'."""
-        off = [t for a, _, t in TOGGLES if not getattr(self, a)]
+        off = [t for a, t in TOGGLES if not getattr(self, a)]
         return "-".join(off) if off else "FULL"
 
     def describe(self) -> str:
-        on = [a for a, _, _ in TOGGLES if getattr(self, a)]
-        off = [a for a, _, _ in TOGGLES if not getattr(self, a)]
+        on = [a for a, _ in TOGGLES if getattr(self, a)]
+        off = [a for a, _ in TOGGLES if not getattr(self, a)]
         return (f"base_dim={self.base_dim} enc={self.enc_depth} dec={self.dec_depth} "
                 f"bott={self.bottleneck_depth}\n"
                 f"    ON  : {', '.join(on) or '(none)'}\n"
                 f"    OFF : {', '.join(off) or '(none)'}")
 
 
-# (config attribute, CLI flag, short tag)
+# (config attribute, short tag). The tag names the variant in the run directory and
+# in the checkpoint filename, so an ablated model stays identifiable from its path.
+# What each one switches off is documented beside it in configs/restoration.yaml,
+# which is where a variant is now configured - there is no flag per toggle, because
+# inference never needs one: every checkpoint carries the config it was trained with.
 TOGGLES = [
-    ("use_prenorm", "no-prenorm", "NoPre"),
-    ("use_naf_norm", "no-naf-norm", "NoNorm"),
-    ("use_simple_gate", "no-simple-gate", "NoGate"),
-    ("use_naf_scale", "no-naf-scale", "NoScale"),
-    ("use_ca", "no-ca", "NoCA"),
-    ("use_skip1", "no-skip1", "NoSkip1"),
-    ("use_skip2", "no-skip2", "NoSkip2"),
-    ("use_skip3", "no-skip3", "NoSkip3"),
-    ("use_bottleneck", "no-bottleneck", "NoBott"),
-    ("use_tanh", "no-tanh", "NoTanh"),
+    ("use_prenorm", "NoPre"),
+    ("use_naf_norm", "NoNorm"),
+    ("use_simple_gate", "NoGate"),
+    ("use_naf_scale", "NoScale"),
+    ("use_ca", "NoCA"),
+    ("use_skip1", "NoSkip1"),
+    ("use_skip2", "NoSkip2"),
+    ("use_skip3", "NoSkip3"),
+    ("use_bottleneck", "NoBott"),
+    ("use_tanh", "NoTanh"),
 ]
-
-TOGGLE_HELP = {
-    "no-prenorm": "disable the pre-LayerNorm of NAFSEBlock",
-    "no-naf-norm": "disable LayerNorm2d inside NAFBlock",
-    "no-simple-gate": "replace SimpleGate (x1*x2) with GELU (no channel halving)",
-    "no-naf-scale": "disable learnable residual scales beta / gamma",
-    "no-ca": "disable channel attention; the block becomes a plain NAFBlock",
-    "no-skip1": "disable U-Net skip enc1 -> dec1 (full resolution)",
-    "no-skip2": "disable U-Net skip enc2 -> dec2 (1/2 resolution)",
-    "no-skip3": "disable U-Net skip enc3 -> dec3 (1/4 resolution)",
-    "no-bottleneck": "replace the 1/8-resolution bottleneck with Identity",
-    "no-tanh": "disable the output tanh (unbounded residual)",
-}
-
-
-def add_ablation_args(parser):
-    """
-    Register the --no-* toggles and the capacity overrides. Training only.
-
-    Inference has no use for them: every checkpoint carries the config it was trained
-    with, so demo.py and evaluate.py rebuild the right architecture with no flags.
-    """
-    g = parser.add_argument_group("restoration ablation")
-    for _, flag, _ in TOGGLES:
-        g.add_argument(f"--{flag}", action="store_true", help=TOGGLE_HELP[flag])
-    c = parser.add_argument_group("restoration capacity")
-    c.add_argument("--base-dim", type=int, default=48)
-    c.add_argument("--enc-depth", default="2,2,3", help="3 comma separated ints")
-    c.add_argument("--dec-depth", default="2,2,2", help="3 comma separated ints")
-    c.add_argument("--bottleneck-depth", type=int, default=2)
-    c.add_argument("--dw-expand", type=int, default=2)
-    c.add_argument("--ffn-expand", type=int, default=2)
-    c.add_argument("--ca-reduction", type=int, default=16)
-    return parser
-
-
-def _parse_depth(text, name):
-    parts = [p for p in str(text).replace(" ", "").split(",") if p]
-    if len(parts) != 3:
-        raise ValueError(f"--{name} needs exactly 3 comma separated ints, got {text!r}")
-    return tuple(int(p) for p in parts)
-
-
-def config_from_args(args) -> RestorationConfig:
-    kw = {attr: not getattr(args, flag.replace("-", "_"), False)
-          for attr, flag, _ in TOGGLES}
-    for name in ("base_dim", "bottleneck_depth", "dw_expand", "ffn_expand",
-                 "ca_reduction"):
-        if getattr(args, name, None) is not None:
-            kw[name] = getattr(args, name)
-    for name in ("enc_depth", "dec_depth"):
-        if getattr(args, name, None) is not None:
-            kw[name] = _parse_depth(getattr(args, name), name.replace("_", "-"))
-    return RestorationConfig(**kw)
 
 
 # Attribute names below must not change - checkpoints key off them.
@@ -385,8 +336,7 @@ def _mismatch_help(path, cfg: RestorationConfig, cfg_source: str) -> str:
 
     The common cause is a checkpoint that carries no config of its own: it gets
     rebuilt from the defaults, so an ablated variant never matches. Nothing in the
-    key list says that, and the ablation flags are training-only, so the answer is
-    the `ablation:` block of a config file.
+    key list says that, so the answer is the `ablation:` block of the config file.
     """
     lines = [f"{os.path.basename(str(path))} does not fit the architecture it was "
              f"loaded into (tag {cfg.tag()}, config from {cfg_source})."]
@@ -394,7 +344,7 @@ def _mismatch_help(path, cfg: RestorationConfig, cfg_source: str) -> str:
         lines.append(
             "    This checkpoint carries no config of its own, so it was rebuilt from\n"
             "    the defaults. If it is an ablated variant, describe it in the\n"
-            "    'ablation:' block of a YAML and pass --restoration-config <file>.")
+            "    'ablation:' block of projector_distortion/configs/restoration.yaml.")
     else:
         lines.append("    The embedded config does not match the stored weights, so "
                      "the file is likely corrupt or hand-edited.")

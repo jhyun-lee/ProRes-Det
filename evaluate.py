@@ -4,11 +4,16 @@
 Score detection and restoration before vs after, against a labelled split.
 
     python evaluate.py                                 # data/SampleData/sample_eval
-    python evaluate.py --detector ssd --conf 0.3
-    python evaluate.py --detector yolo,ssd             # one row per backend
     python evaluate.py --iou 0.75 --output output/eval
     python evaluate.py --input data/SampleData/sample_test \
                        --gt    data/SampleData/sample_test   # the held-out split
+
+Which detector is scored comes from `detector.backend` in configs/detection.yaml,
+along with its checkpoint and confidence floor. Name several to get one row per
+backend in the same report:
+
+    detector:
+      backend: [yolo, ssd]
 
 Both labelled splits live under data/SampleData: sample_eval (22 pairs, YOLO txt
 labels) is the default, sample_test (200 pairs, LabelMe json labels) is held out.
@@ -36,9 +41,10 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from projector_distortion.cli import (  # noqa: E402
-    DEFAULT_GT, DEFAULT_INPUT, DEFAULT_OUTPUT, DETECTOR_HELP, add_common_args,
-    box_filter_kwargs, build_models, run_dir,
+    DEFAULT_GT, DEFAULT_INPUT, DEFAULT_OUTPUT, box_filter_kwargs, build_models,
+    detector_backends, run_dir,
 )
+from projector_distortion.config import load_config  # noqa: E402
 from projector_distortion.config import resolve_path  # noqa: E402
 from projector_distortion.data import find_samples  # noqa: E402
 from projector_distortion.pipeline import process_sample  # noqa: E402
@@ -53,11 +59,8 @@ def build_parser():
     p.add_argument("--gt", default=DEFAULT_GT,
                    help="ground truth folder (surface/ + labels/)")
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="where the report goes")
-    p.add_argument("--name", default=None, help="run folder name")
     p.add_argument("--limit", type=int, default=0, help="score at most N pairs")
     p.add_argument("--iou", type=float, default=0.5, help="IoU for a true positive")
-    add_common_args(p, detector_help=DETECTOR_HELP + ". Takes a comma separated list "
-                                     "here (yolo,ssd) for one row per backend")
     return p
 
 
@@ -164,13 +167,11 @@ class Scorer:
         return overall, rows
 
 
-def evaluate_one(backend, args, out_dir, det_weights):
+def evaluate_one(backend, args, out_dir):
     """Score a single detector backend; returns the result dict."""
-    args.detector = backend
-    args.det_weights = det_weights
-
-    restorer, detector, info = build_models(args, need_detector=True)
-    box_filter = box_filter_kwargs(args, info["detection_config"])
+    restorer, detector, info = build_models(need_detector=True,
+                                            detector_backend=backend)
+    box_filter = box_filter_kwargs(info["detection_config"])
     class_names = detector.class_names
 
     samples = find_samples(resolve_path(args.input), gt_root=resolve_path(args.gt),
@@ -245,23 +246,6 @@ def _write_csv(path, fieldnames, rows):
         w.writerows(rows)
 
 
-def _weights_per_backend(backends, explicit):
-    """
-    --det-weights names one checkpoint, so it can apply to at most one backend.
-
-    Across several it is ignored and every backend falls back to
-    configs/detection.yaml; otherwise comparing yolo against ssd would load one
-    backend's checkpoint into the other.
-    """
-    if explicit and len(backends) == 1:
-        return {backends[0]: explicit}
-    if explicit:
-        print(f"warning: --det-weights names one checkpoint but {len(backends)} "
-              f"backends are being compared; ignoring it. Per-backend paths come "
-              f"from configs/detection.yaml.")
-    return {b: None for b in backends}
-
-
 def _eval_dir_name(input_root):
     """`.../sample_eval` -> `Eval_sample_eval`, so a report is named by its dataset."""
     return "Eval_" + os.path.basename(os.path.normpath(str(input_root)))
@@ -282,16 +266,20 @@ def _clear_stale_reports(out_dir):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     input_root = resolve_path(args.input) or args.input
-    out_dir = run_dir(args.output, args.name or _eval_dir_name(input_root))
+    out_dir = run_dir(args.output, _eval_dir_name(input_root))
     _clear_stale_reports(out_dir)
-    # --detector takes a comma separated list here, so one run can compare backends.
-    backends = [b.strip() for b in (args.detector or "yolo").split(",") if b.strip()]
-    weights = _weights_per_backend(backends, args.det_weights)
+    # detector.backend takes a list, so one run can compare backends. Each one loads
+    # its own checkpoint from weights.<backend>, which is what keeps a comparison
+    # from running yolo's weights through ssd.
+    try:
+        backends = detector_backends(load_config("detection"))
+    except (FileNotFoundError, ImportError) as e:
+        raise SystemExit(str(e)) from e
 
     results = {}
     for backend in backends:
         print(f"\n{'=' * 70}\n{backend}\n{'=' * 70}")
-        results[backend] = evaluate_one(backend, args, out_dir, weights[backend])
+        results[backend] = evaluate_one(backend, args, out_dir)
 
     with open(os.path.join(out_dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False, default=str)

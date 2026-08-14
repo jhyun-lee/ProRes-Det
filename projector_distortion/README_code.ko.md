@@ -20,8 +20,8 @@
 ```
 demo.py / evaluate.py / train.py
    │
-   ├─ cli.add_common_args        공용 플래그
-   ├─ cli.build_models           YAML + 플래그 → (restorer, detector, info)
+   ├─ cli.detector_backends      detector.backend → 이름 하나, 또는 비교용 리스트
+   ├─ cli.build_models           YAML → (restorer, detector, info)
    │     ├─ config.load_config   configs/*.yaml, 병합
    │     ├─ models.build_restorer
    │     └─ models.build_detector
@@ -55,7 +55,7 @@ demo.py / evaluate.py / train.py
 | 파일 | 담당 |
 |---|---|
 | [`__init__.py`](__init__.py) | 공개 API 재노출, `__version__` |
-| [`cli.py`](cli.py) | 공용 argparse 그룹, config 우선순위, `build_models`, 디바이스 결정, `run_dir`, `pdf-*` 콘솔 엔트리포인트 |
+| [`cli.py`](cli.py) | 공용 기본값, `build_models`(모델은 YAML에서만), `detector_backends`, 디바이스 결정, `run_dir`, `pdf-*` 콘솔 엔트리포인트 |
 | [`config.py`](config.py) | `load_config` (YAML + 재귀 병합), `resolve_path` (`PROJECT_ROOT` 기준), `pick` (CLI가 YAML보다 우선) |
 | [`data.py`](data.py) | 파일명 → id 파싱, 레이아웃 감지, `find_samples`, `index_triplets`, 라벨 로딩(YOLO txt·LabelMe json), `TripletPatchDataset` |
 
@@ -65,6 +65,8 @@ demo.py / evaluate.py / train.py
 |---|---|
 | [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (backend, weights, input_size) · `ablation` (구조 + 용량) · `train` (데이터 경로, 하이퍼파라미터, 손실 가중치) |
 | [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, 박스 게이트) · 백엔드별 `weights` · `names` (17클래스) |
+| [`configs/live.yaml`](configs/live.yaml) | `rig` (screen, camera, cam_backend, offset, review_calibration) — `demo.py --live`가 구동하는 리그 |
+| [`configs/collect.yaml`](configs/collect.yaml) | `session` · `light` · `capture` · `warp` · `record` — `Data.py`와 `data/` 아래 스크립트가 읽는다. 이 패키지는 읽지 않는다 |
 
 ### `models/`
 
@@ -102,11 +104,11 @@ autotuning 때문에 1번 프레임이 정상 상태의 약 50배가 걸리기 �
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
 | [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`, `parse_kinds` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS` |
 | [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 모니터 열거와 테두리 없는 배치 |
 
 `display.py`를 따로 둔 이유는 창을 프로젝터로 보내는 일이 파이프라인의 관심사가 아니고,
-`collect.py`·`record.py`도 똑같이 필요하기 때문이다. Windows에서
+`data/capture.py`·`data/record.py`도 똑같이 필요하기 때문이다. Windows에서
 `cv2.setWindowProperty(WND_PROP_FULLSCREEN)`는 창을 주 디스플레이로 되돌리면서
 `cv2.moveWindow()`를 조용히 무효화한다. 그래서 순진한 `--screen`은 먹지 않고, 좌표를 Win32
 API로 처리한다. `live.place_window`는 프로젝터 창 제목만 채워 넘기는 한 줄짜리 래퍼다.
@@ -201,7 +203,7 @@ for i, s in enumerate(find_samples(root, root)):
 
 ## 테스트
 
-114개, 하드웨어 불필요.
+118개, 하드웨어 불필요.
 
 | 파일 | 커버 |
 |---|---|
@@ -209,7 +211,7 @@ for i, s in enumerate(find_samples(root, root)):
 | [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | 파일명 id, 샘플 탐색, PSNR/SSIM/IoU, `RunRecorder` 동작, 삼중쌍 인덱싱, `average_precision`, argparse 기본값, 미등록 백엔드 처리, 스텁으로 구동한 `live._worker` 큐 계약, `device_note`, `requirements-cuda.txt` 핀 |
 | [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig`와 tag, 모든 토글의 빌드 + 1스텝 학습, forward 크기, 체크포인트 왕복, 기본 가중치, 서드파티 백엔드로 검증한 복원기 레지스트리 |
 | [`../tests/test_detection.py`](../tests/test_detection.py) | 레지스트리, 라벨 정규화, 박스 크기 게이트, 실제 체크포인트로 두 백엔드 검증 |
-| [`../tests/test_collect.py`](../tests/test_collect.py) | 리그 없이 되는 `collect.py`: 코너 정렬, 경계 리샘플링, `boundary` vs `homography` 동등성, `warp`·`light` 단계 출력 |
+| [`../tests/test_collect.py`](../tests/test_collect.py) | 리그 없이 되는 `data/warp.py`·`data/make_light.py`: 코너 정렬, 경계 리샘플링, `boundary` vs `homography` 동등성, 정류 단계 출력과 debug 그림 |
 
 ```bash
 python -m pytest -q

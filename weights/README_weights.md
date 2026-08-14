@@ -13,14 +13,13 @@ residual instead of the surface image.
 ## Files
 
 All three are committed to git — 51 MiB in total — so a clone runs with no extra download.
-To use your own, point at them with `--restorer-weights` / `--det-weights` rather than
-overwriting these.
+To use your own, point the configs below at them rather than overwriting these.
 
 | File | Used for | Architecture | Params | Size |
 |---|---|---|---|---|
 | `restorer_nafse_unet.pt` | restoration | 3-level U-Net of NAFSEBlock | 4,184,259 | 16.1 MiB |
-| `detector_yolo11s.pt` | `--detector yolo` | YOLO11s | 9,434,371 | 18.3 MiB |
-| `detector_ssdlite.pth` | `--detector ssd` | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
+| `detector_yolo11s.pt` | the `yolo` detector | YOLO11s | 9,434,371 | 18.3 MiB |
+| `detector_ssdlite.pth` | the `ssd` detector | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
 
 All three are fine-tuned on the same 17-class projector-distortion dataset — 11 fruits and
 6 animals. The class list lives in
@@ -32,7 +31,8 @@ torchvision has no names, so `ssd` always uses the config's list.
 
 ## Where the paths come from
 
-The configs, so no path is hard-coded in the source:
+The configs, and only the configs — there is no CLI flag for any of these paths, so a
+checkpoint swap is a one-line edit that every entry point picks up at once:
 
 ```yaml
 # projector_distortion/configs/restoration.yaml
@@ -48,11 +48,6 @@ weights:
 
 These resolve against the project root, not the working directory.
 
-```bash
-python demo.py --restorer-weights path/to/other.pt
-python demo.py --detector ssd --det-weights path/to/other.pth
-```
-
 ---
 
 ## Checkpoint format
@@ -66,12 +61,14 @@ Anything `train.py` produces stores the architecture config next to the weights:
 ```
 
 `load_checkpoint()` reads `cfg` and rebuilds the matching architecture, so an ablated
-variant never needs its flags repeated at inference time.
+variant never needs its config restated at inference time.
 
 ```bash
-python train.py --no-ca --epochs 30
-python demo.py --restorer-weights runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
-#                                  ↑ no --no-ca needed
+# ablation: { use_ca: false } in projector_distortion/configs/restoration.yaml
+python train.py --epochs 30
+# then point model.weights at runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
+python demo.py
+#   the ablation block does not have to stay set: the config travels in the checkpoint
 ```
 
 Runs print where the config came from:
@@ -117,8 +114,8 @@ see objects that were never there, which destroys the whole point of the evaluat
 
 **3) Values cannot blow up.**
 The output `tanh` bounds the residual to [-1, 1], and `clamp(-1, 1)` bounds the result
-after the subtraction — two layers of range control. `--no-tanh` removes the first; that is
-one of the ablation switches.
+after the subtraction — two layers of range control. `use_tanh: false` removes the first;
+that is one of the ablation switches.
 
 ### How it is enforced — the loss is on `restored`, not on the residual
 

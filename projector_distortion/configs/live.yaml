@@ -1,0 +1,37 @@
+# The live rig, as demo.py --live drives it.
+#
+# These are properties of the physical setup - which monitor the projector is on,
+# which webcam points at the screen, how far the camera lags behind it - not of the
+# run. They belong to the machine, so they are set once here.
+#
+# `data/*.py` read the same kind of settings from collect.yaml, under `capture:` and
+# `record:`. Two files rather than one because the collection scripts run without
+# torch and never import this package's pipeline.
+
+rig:
+  # Monitor the projector is on; 0 = primary. The table printed at startup lists
+  # them, so a wrong guess costs one aborted run to correct.
+  screen: 1
+  camera: 0               # webcam index
+  cam_backend: auto       # auto | any | dshow | msmf | v4l2
+                          # 'auto' tries DirectShow before MSMF on Windows, because the
+                          # default MSMF path regularly stalls for tens of seconds
+                          # opening a camera (measured 20.8s vs 0.9s).
+
+  # Projector -> camera latency, in frames.
+  #
+  # The camera frame that shows light frame N arrives `offset` frames later, so this
+  # is what pairs a capture with the frame that actually caused it. Too low and the
+  # model is fed the previous frame's light; too high and it is fed a future one.
+  # Measure it once per rig: --debug-view, then count frames between a projected
+  # change and its appearance in the feed.
+  offset: 6
+
+  # Hold the rectified first frame on screen and wait for a verdict before the run
+  # starts: enter/a accept, m click the corners, r re-detect, q quit.
+  #
+  # The warp is estimated once and reused for every frame after it, so a quad that is
+  # off by a corner poisons the whole session quietly - the panel still looks
+  # plausible and the residual is nonsense. Checking costs one keypress. Set false
+  # only for an unattended run, where there is nobody to press it.
+  review_calibration: true

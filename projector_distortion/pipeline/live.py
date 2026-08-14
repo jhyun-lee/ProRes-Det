@@ -1,9 +1,9 @@
 """
 Live pipeline: webcam + projector rig. Needs real hardware.
 
-    projector shows BeamVideo frame N
+    projector shows test_light.mp4 frame N
     webcam captures it                  -> 4-point homography -> `distorted`
-    the frame shown --offset frames ago -> `light`
+    the frame shown rig.offset frames ago -> `light`
     restore(distorted, light) -> detect both -> 2x2 panel + recorder
 
 The first frame's warp input and output are written to calib/ and shown once, so the
@@ -34,11 +34,21 @@ WINDOW = "Projector_Display"
 PANEL = "Combined_View"
 DEBUG_WINDOW = "PreWarp_Debug"
 WARP_WINDOW = "Warp_FirstFrame"
+REVIEW_WINDOW = "Calibration_Review"
 
 CLICK_ORDER = "TL -> TR -> BR -> BL"
 
 CAM_BACKENDS = {"auto": None, "any": cv2.CAP_ANY, "dshow": cv2.CAP_DSHOW,
                 "msmf": cv2.CAP_MSMF, "v4l2": cv2.CAP_V4L2}
+
+# What every entry point asks the webcam for. One place rather than a flag per number
+# on each script: drivers routinely ignore the request anyway, which is why
+# open_webcam() reads back what actually happened and prints both.
+CAM_WIDTH, CAM_HEIGHT, CAM_FPS = 1280, 960, 30
+
+# Seconds to wait after each calibration flash, so the projector and the panel have
+# finished changing before the camera is read.
+CALIB_SETTLE = 0.8
 
 # Frames allowed to be waiting on the worker. Deep enough to ride out a slow frame,
 # shallow enough that the panel never trails the projector by much.
@@ -230,7 +240,98 @@ def manual_calibrate(cap, hold=1.0):
         cv2.destroyWindow(window)
 
 
-def open_webcam(index, backend="auto", width=None, height=None, fps=None):
+def describe_corners(points, shape) -> str:
+    """Corner coordinates plus the two sanity numbers, for the review prompt."""
+    quad = np.asarray(points, np.float32).reshape(4, 2)
+    h, w = shape[:2]
+    area = abs(cv2.contourArea(quad))
+    edges = [float(np.hypot(*(quad[(i + 1) % 4] - quad[i]))) for i in range(4)]
+    lines = [f"      {n} ({x:6.0f}, {y:6.0f})"
+             for n, (x, y) in zip(("TL", "TR", "BR", "BL"), quad)]
+    lines.append(f"      covers {100 * area / (w * h):.0f}% of the {w}x{h} camera frame")
+    lines.append(f"      edges  top {edges[0]:.0f}  right {edges[1]:.0f}  "
+                 f"bottom {edges[2]:.0f}  left {edges[3]:.0f} px")
+    return "\n".join(lines)
+
+
+def _fresh_frame(cap, discard=4):
+    """The live frame, not the one the driver had queued from before the flashes."""
+    for _ in range(discard):
+        cap.read()
+    ok, frame = cap.read()
+    return frame if ok else None
+
+
+def review_calibration(cam, background, points, mode, out_size, calib_debug):
+    """
+    Put the warp on screen and wait for a verdict before the run commits to it.
+
+    Calibration happens once and is never re-estimated, so a quad that is off by a
+    corner silently poisons every frame of the session: the panel still looks
+    plausible, the residual is nonsense, and nothing says so until the run is over.
+    One keypress here is much cheaper than finding out afterwards.
+
+    Returns (points, mode), or None if the operator quit. Mirrors the keys
+    `data/warp.py --review` uses on the collected stills, so the two feel the same.
+    """
+    from ..utils.visualize import warp_before_after
+
+    while True:
+        preview = pre = None
+        if points is not None:
+            try:
+                w_cal, h_cal = warp_size(points)
+            except ValueError as e:
+                print(f"    calibration rejected: {e}")
+                points = None
+            else:
+                pre = _fresh_frame(cam)
+                if pre is None:
+                    print("warning: camera read failed while reviewing.")
+                    return None
+                preview = warp(pre, homography(points, w_cal, h_cal),
+                               w_cal, h_cal, out_size)
+
+        if preview is None:
+            # Nothing to show, so nothing to accept. The projector window is up and
+            # takes the keypress.
+            print("    no usable calibration yet.")
+            print("    [calibration] m click the corners | r re-detect | q quit")
+            key = cv2.waitKey(0) & 0xFF
+        else:
+            print(f"    {mode} calibration -> warp target {w_cal}x{h_cal}:")
+            print(describe_corners(points, pre.shape))
+            cv2.imshow(REVIEW_WINDOW, warp_before_after(pre, preview, points))
+            print("    [calibration] enter/a accept | m click the corners | "
+                  "r re-detect | q quit")
+            key = cv2.waitKey(0) & 0xFF
+            cv2.destroyWindow(REVIEW_WINDOW)
+
+        if key in (13, 32, ord("a")) and preview is not None:
+            return points, mode
+        if key == ord("q"):
+            return None
+        if key == ord("r"):
+            calib_debug.clear()
+            points = auto_calibrate(cam, background.shape, settle=CALIB_SETTLE,
+                                    debug=calib_debug)
+            mode = "auto" if points is not None else mode
+            cv2.imshow(WINDOW, background)
+            cv2.waitKey(1)
+            continue
+        if key == ord("m"):
+            clicked = manual_calibrate(cam)
+            if clicked is not None:
+                points, mode = clicked, "manual"
+            elif points is None:
+                return None            # nothing to fall back on
+            cv2.imshow(WINDOW, background)
+            cv2.waitKey(1)
+            continue
+
+
+def open_webcam(index, backend="auto", width=CAM_WIDTH, height=CAM_HEIGHT,
+                fps=CAM_FPS):
     """
     Open a webcam and report what actually happened.
 
@@ -413,15 +514,17 @@ def build_panel(result, detector_name="detector") -> np.ndarray:
 
 def run_live(video, restorer, detector, recorder, background=None, camera=0,
              screen=1, offset=6, manual_calib=False, debug_view=False,
-             max_frames=0, cam_size=(1280, 960), cam_fps=30, cam_backend="auto",
-             calib_settle=0.8, min_area=500, min_width=20,
-             min_height=20, detector_name="detector", analyse_every=0) -> Dict:
+             max_frames=0, cam_backend="auto", min_area=500, min_width=20,
+             min_height=20, detector_name="detector", analyse_every=0,
+             review_calib=True) -> Dict:
     """
     Drive the rig until the clip ends or 'q' is pressed. Returns a summary dict.
 
     Calibration happens ONCE before the loop and the homography is reused for every
     frame. It is never re-estimated, so if the camera or projector moves mid-run the
-    warp stays wrong - use debug_view to watch for that.
+    warp stays wrong - use debug_view to watch for that. `review_calib` is what makes
+    the one estimate checkable: it holds the rectified first frame on screen until the
+    operator accepts it, re-detects, or clicks the corners by hand.
     """
     out_size = tuple(restorer.input_size)
 
@@ -444,28 +547,41 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
           f"{clip_size[0]}x{clip_size[1]} (projected as-is; "
           f"the model sees {out_size[0]}x{out_size[1]})")
 
-    cam = open_webcam(camera, cam_backend, cam_size[0], cam_size[1], cam_fps)
+    cam = open_webcam(camera, cam_backend)
     if cam is None:
         clip.release()
         cv2.destroyAllWindows()
         raise RuntimeError(
             f"cannot open webcam index {camera}\n"
-            f"    try another --camera index, another --cam-backend, and close any "
-            f"other app holding the camera."
+            f"    try another rig.camera index or rig.cam_backend in "
+            f"configs/live.yaml, and close any other app holding the camera."
         )
 
     calib_debug, mode, points = {}, "manual", None
-    if not manual_calib:
-        points = auto_calibrate(cam, background.shape, settle=calib_settle,
+    if manual_calib:
+        points = manual_calibrate(cam)
+    else:
+        points = auto_calibrate(cam, background.shape, settle=CALIB_SETTLE,
                                 debug=calib_debug)
         cv2.imshow(WINDOW, background)
         cv2.waitKey(1)
-        if points is None:
-            print("falling back to manual calibration.")
-        else:
+        if points is not None:
             mode = "auto"
-    if points is None:
-        points = manual_calibrate(cam)
+        else:
+            print("automatic calibration failed.")
+            # With the review gate on, its 'm' does this and shows the result;
+            # without it there is nobody to ask, so fall back straight away.
+            if not review_calib:
+                print("falling back to manual calibration.")
+                points = manual_calibrate(cam)
+
+    # The warp is estimated once and reused for every frame after it, so this is the
+    # last moment it can be corrected cheaply.
+    if review_calib:
+        verdict = review_calibration(cam, background, points, mode, out_size,
+                                     calib_debug)
+        points, mode = verdict if verdict else (None, mode)
+
     if points is None:
         cam.release()
         clip.release()
@@ -492,7 +608,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         "note": "estimated once before the loop; not re-estimated per frame",
     }, capture={
         "camera_index": camera, "backend": cam_backend,
-        "requested": [cam_size[0], cam_size[1], cam_fps],
+        "requested": [CAM_WIDTH, CAM_HEIGHT, CAM_FPS],
         "actual": [int(cam.get(cv2.CAP_PROP_FRAME_WIDTH)),
                    int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT)),
                    round(cam.get(cv2.CAP_PROP_FPS), 1)],

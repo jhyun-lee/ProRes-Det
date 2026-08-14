@@ -44,10 +44,36 @@ DISTORTED_PREFIXES = (DISTORTED_PREFIX, LEGACY_DISTORTED_PREFIX)
 LIGHT_PREFIXES = (LIGHT_PREFIX, LEGACY_LIGHT_PREFIX)
 SURFACE_PREFIXES = (SURFACE_PREFIX, LEGACY_SURFACE_PREFIX)
 
-FLAT_DIRS = {"distorted": "distorted", "light": "light", "surface": "surface"}
+FLAT_DIRS = {"distorted": "distorted", "light": "projected", "surface": "surface"}
 LEGACY_FLAT_DIRS = {"distorted": "pro", "light": "beam", "surface": "clean"}
 RESEARCH_DIRS = {"distorted": "ProjectorImage", "light": "BeamImage",
                  "surface": "OriginalImage"}
+
+# The flat layout's light folder used to be called `light/`, which is what the three
+# bundled splits still carry. Only the folder was renamed - the files inside it are
+# `light_<lightId>.jpg` either way, because `projected_` already means something else
+# (it is LEGACY_DISTORTED_PREFIX) and reusing it would make a light frame parse as a
+# distorted one.
+LEGACY_LIGHT_DIR = "light"
+
+
+def _find_light(root) -> Optional[str]:
+    """
+    The light folder for a flat set that does not carry one of its own.
+
+    Two cases, both real. A set collected before the folder rename keeps `light/`.
+    And a collection run splits by day - Create_Data/warp_0812/ holds the pairs while
+    the frames they were lit by sit once in Create_Data/projected/, shared by every
+    day rather than copied into each. Looking one level up is what lets `--input
+    warp_0812` work without duplicating a few thousand jpegs per session.
+    """
+    parent = os.path.dirname(os.path.normpath(str(root)))
+    for candidate in (os.path.join(root, LEGACY_LIGHT_DIR),
+                      os.path.join(parent, FLAT_DIRS["light"]),
+                      os.path.join(parent, LEGACY_LIGHT_DIR)):
+        if os.path.isdir(candidate):
+            return candidate
+    return None
 
 # Tried in order by resolve_dirs; the first whose `distorted` folder exists wins.
 LAYOUTS = (("flat", FLAT_DIRS), ("legacy-flat", LEGACY_FLAT_DIRS),
@@ -102,7 +128,10 @@ def resolve_dirs(root) -> Tuple[str, Dict[str, str]]:
     root = str(root)
     for layout, mapping in LAYOUTS:
         if os.path.isdir(os.path.join(root, mapping["distorted"])):
-            return layout, {k: os.path.join(root, v) for k, v in mapping.items()}
+            dirs = {k: os.path.join(root, v) for k, v in mapping.items()}
+            if layout == "flat" and not os.path.isdir(dirs["light"]):
+                dirs["light"] = _find_light(root) or dirs["light"]
+            return layout, dirs
     if _images_in(root):
         return "mixed", {"distorted": root, "light": root, "surface": root}
     raise FileNotFoundError(
