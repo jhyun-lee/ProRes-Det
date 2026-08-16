@@ -114,6 +114,13 @@ rig:
   offset: 6      # 프로젝터 → 카메라 지연, 프레임 단위
 ```
 
+앞의 둘은 `--screen`·`--camera`로 실행 한 번만 덮을 수 있다. 잘못 짚었을 때 파일을 고치는
+대신 이걸로 끝난다:
+
+```bash
+python demo.py --live --screen 2
+```
+
 모든 옵션과 입출력: [README_running.ko.md](README_running.ko.md).
 
 직접 데이터를 수집하는 것은 `Data.py`이고, `data/` 아래 스크립트로 분기한다:

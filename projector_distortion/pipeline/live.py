@@ -197,6 +197,7 @@ def auto_calibrate(cap, projector_shape, settle=0.8, frames=5, min_area_frac=0.0
     canvas = draw_quad(shots[1], points, "auto calibration (white flash)")
     dbg["overlay"] = canvas
     cv2.imshow("AutoCalib", canvas)
+    topmost("AutoCalib")
     cv2.waitKey(1)
     time.sleep(hold)
     cv2.destroyWindow("AutoCalib")
@@ -214,6 +215,7 @@ def manual_calibrate(cap, hold=1.0):
 
     window = "CheckPoint"
     cv2.namedWindow(window)
+    topmost(window)
     cv2.setMouseCallback(window, on_mouse)
     print("click the 4 corners of the projected area in any order ('q' aborts).")
     try:
@@ -262,6 +264,46 @@ def _fresh_frame(cap, discard=4):
     return frame if ok else None
 
 
+def topmost(window):
+    """
+    Keep a prompt in front of the fullscreen projector window.
+
+    place_fullscreen raises the projector window to the top of the z-order and
+    leaves it borderless and never deactivated, so a window created after it can
+    land behind - taking the keystrokes it was waiting for with it. data/capture.py
+    pins its framing preview for the same reason.
+    """
+    try:
+        cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 1)
+    except cv2.error:
+        pass                      # older OpenCV builds lack the property
+
+
+def _review_canvas(pre, preview, points, hint):
+    """
+    What the review gate puts on screen - including when there is nothing to accept.
+
+    A failed detection used to draw no window at all, which is indistinguishable
+    from a hang: the projector is showing its background, the console line naming
+    the keys is behind it, and the run is blocked on a keypress nobody knows to
+    make. Showing the camera with the reason written on it is what turns that into
+    something the operator can act on, and it mirrors what data/capture.py does when
+    its own boundary detection comes up empty.
+    """
+    from ..utils.visualize import warp_before_after
+
+    if preview is not None:
+        return warp_before_after(pre, preview, points, hint=hint)
+
+    blank = np.full_like(pre, 24)
+    cv2.putText(blank, "no screen boundary found", (24, blank.shape[0] // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (60, 60, 220), 2, cv2.LINE_AA)
+    return warp_before_after(
+        pre, blank, points, hint=hint,
+        labels=(f"(a) pre-warp camera {pre.shape[1]}x{pre.shape[0]}",
+                "(b) nothing to rectify yet"))
+
+
 def review_calibration(cam, background, points, mode, out_size, calib_debug):
     """
     Put the warp on screen and wait for a verdict before the run commits to it.
@@ -274,10 +316,15 @@ def review_calibration(cam, background, points, mode, out_size, calib_debug):
     Returns (points, mode), or None if the operator quit. Mirrors the keys
     `data/warp.py --review` uses on the collected stills, so the two feel the same.
     """
-    from ..utils.visualize import warp_before_after
-
     while True:
-        preview = pre = None
+        preview = None
+        # Fetched before the branch: the camera view is what gets shown either way,
+        # and with no calibration it is the only thing there is to show.
+        pre = _fresh_frame(cam)
+        if pre is None:
+            print("warning: camera read failed while reviewing.")
+            return None
+
         if points is not None:
             try:
                 w_cal, h_cal = warp_size(points)
@@ -285,27 +332,22 @@ def review_calibration(cam, background, points, mode, out_size, calib_debug):
                 print(f"    calibration rejected: {e}")
                 points = None
             else:
-                pre = _fresh_frame(cam)
-                if pre is None:
-                    print("warning: camera read failed while reviewing.")
-                    return None
                 preview = warp(pre, homography(points, w_cal, h_cal),
                                w_cal, h_cal, out_size)
 
         if preview is None:
-            # Nothing to show, so nothing to accept. The projector window is up and
-            # takes the keypress.
             print("    no usable calibration yet.")
-            print("    [calibration] m click the corners | r re-detect | q quit")
-            key = cv2.waitKey(0) & 0xFF
+            hint = "m click the corners    r re-detect    q quit"
         else:
             print(f"    {mode} calibration -> warp target {w_cal}x{h_cal}:")
             print(describe_corners(points, pre.shape))
-            cv2.imshow(REVIEW_WINDOW, warp_before_after(pre, preview, points))
-            print("    [calibration] enter/a accept | m click the corners | "
-                  "r re-detect | q quit")
-            key = cv2.waitKey(0) & 0xFF
-            cv2.destroyWindow(REVIEW_WINDOW)
+            hint = "enter/a accept    m click the corners    r re-detect    q quit"
+
+        print(f"    [calibration] {hint.replace('    ', ' | ')}")
+        cv2.imshow(REVIEW_WINDOW, _review_canvas(pre, preview, points, hint))
+        topmost(REVIEW_WINDOW)
+        key = cv2.waitKey(0) & 0xFF
+        cv2.destroyWindow(REVIEW_WINDOW)
 
         if key in (13, 32, ord("a")) and preview is not None:
             return points, mode
@@ -583,6 +625,13 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         points, mode = verdict if verdict else (None, mode)
 
     if points is None:
+        # The flashes and the mask they produced are the only evidence of why
+        # detection failed, and this is the path that used to throw them away -
+        # precisely the run where someone needs to look at them.
+        written = recorder.save_calibration(None, debug=calib_debug)
+        if written:
+            print(f"calibration debug: {len(written)} image(s) -> "
+                  f"{recorder.calib_dir}")
         cam.release()
         clip.release()
         cv2.destroyAllWindows()

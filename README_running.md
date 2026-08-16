@@ -26,7 +26,7 @@ unreadable.
 
 | Setting | Where |
 |---|---|
-| Live rig: monitor, webcam, projector→camera latency | `rig:` in `live.yaml` |
+| Live rig: monitor, webcam, projector→camera latency | `rig:` in `live.yaml` — monitor and webcam also take `--screen` / `--camera` |
 | Collection rig, session folders, warp geometry | `collect.yaml` — read by `Data.py`, not by these three |
 | Restoration backend | `model.backend` in `restoration.yaml` |
 | Restoration checkpoint | `model.weights` in `restoration.yaml` |
@@ -109,6 +109,12 @@ rig:
 low feeds the model the previous frame's light, too high a future one. Measure it once
 with `--debug-view`.
 
+`--screen` and `--camera` override the first two for a single run, the same way they do
+on `Data.py capture` — those are the two that get guessed wrong on the first run of a
+session, and correcting one should not mean editing a file. `offset` and `cam_backend`
+stay config-only: they are measured or discovered once per rig and do not differ between
+two runs on it.
+
 The requested camera resolution and rate are fixed at 1280×960 @30fps
 (`CAM_WIDTH` / `CAM_HEIGHT` / `CAM_FPS` in `projector_distortion/pipeline/live.py`).
 Drivers routinely ignore the request, which is why the startup line prints what the
@@ -129,6 +135,8 @@ collection scripts run without torch and never import the pipeline package.
 
 | Option | Default | Meaning |
 |---|---|---|
+| `--screen N` | `rig.screen` (`1`) | Monitor the projector is on, `0` = primary. `python Data.py check` prints the table |
+| `--camera N` | `rig.camera` (`0`) | Webcam index |
 | `--manual-calib` | off | Click the 4 corners instead of auto-detecting them |
 | `--debug-view` | off | Live window with the pre-warp camera feed and the quad |
 
@@ -137,6 +145,7 @@ than named — see below.
 
 ```bash
 python demo.py --live
+python demo.py --live --screen 2
 python demo.py --live --save-every 30 --debug-view
 ```
 
@@ -220,8 +229,12 @@ frame the screen really occupies, and opposite **edges** should be close to equa
 quad that grabbed a window or a lamp usually shows up as one of those being wildly off,
 before you even look at the picture.
 
-If auto-detection found nothing there is no preview and no accept — only `m`, `r` and
-`q`. `--manual-calib` skips straight to clicking, and the review still runs afterwards.
+If auto-detection found nothing there is nothing to accept — only `m`, `r` and `q`. The
+window still comes up, showing the camera next to a red *no screen boundary found*, so
+the gate never looks like a hang. The key bindings are drawn along the bottom of the
+figure as well as printed, because on the rig the terminal is behind a fullscreen
+projector. `--manual-calib` skips straight to clicking, and the review still runs
+afterwards.
 
 Set `rig.review_calibration: false` in
 [configs/live.yaml](projector_distortion/configs/live.yaml) for an unattended run,

@@ -25,7 +25,7 @@
 
 | 설정 | 위치 |
 |---|---|
-| 라이브 리그: 모니터·웹캠·프로젝터→카메라 지연 | `live.yaml`의 `rig:` |
+| 라이브 리그: 모니터·웹캠·프로젝터→카메라 지연 | `live.yaml`의 `rig:` — 모니터·웹캠은 `--screen` / `--camera`로도 지정 |
 | 수집 리그, 세션 폴더, 워프 기하 | `collect.yaml` — `Data.py`가 읽고, 이 셋은 읽지 않는다 |
 | 복원 백엔드 | `restoration.yaml`의 `model.backend` |
 | 복원 체크포인트 | `restoration.yaml`의 `model.weights` |
@@ -104,6 +104,11 @@ rig:
 모델에 이전 프레임의 light가, 높으면 미래 프레임이 들어간다. `--debug-view`로 한 번 재면
 된다.
 
+앞의 둘은 `--screen` / `--camera`로 실행 한 번만 덮을 수 있다. `Data.py capture`와 같은
+방식이다 — 세션 첫 실행에서 틀리기 쉬운 값이 이 둘이고, 하나 고치자고 파일을 열 일은
+아니기 때문이다. `offset`과 `cam_backend`는 설정 전용으로 남는다. 리그당 한 번 측정하거나
+알아내는 값이고, 같은 리그의 두 실행 사이에 달라지지 않는다.
+
 카메라에 요청하는 해상도와 프레임레이트는 1280×960 @30fps로 고정이다
 (`projector_distortion/pipeline/live.py`의 `CAM_WIDTH` / `CAM_HEIGHT` / `CAM_FPS`).
 드라이버가 요청을 무시하는 일이 흔해서, 시작 줄에 카메라가 실제로 열린 값을 찍는다.
@@ -123,6 +128,8 @@ rig:
 
 | 옵션 | 기본값 | 의미 |
 |---|---|---|
+| `--screen N` | `rig.screen` (`1`) | 프로젝터가 붙은 모니터, `0` = 주 디스플레이. `python Data.py check`가 표를 출력한다 |
+| `--camera N` | `rig.camera` (`0`) | 웹캠 인덱스 |
 | `--manual-calib` | off | 자동 검출 대신 네 코너를 직접 클릭 |
 | `--debug-view` | off | 워프 전 카메라 피드 + 사각형을 실시간 표시 |
 
@@ -130,6 +137,7 @@ rig:
 
 ```bash
 python demo.py --live
+python demo.py --live --screen 2
 python demo.py --live --save-every 30 --debug-view
 ```
 
@@ -208,8 +216,10 @@ projector 29.1 fps (450 frames) | analysis 13.0 fps (every 2 frame(s): 201 analy
 마주보는 **edges**는 서로 비슷해야 한다. 창문이나 조명을 잡은 사각형은 그림을 보기도 전에
 둘 중 하나가 크게 어긋나는 것으로 드러난다.
 
-자동 검출이 아무것도 못 찾으면 프리뷰도 수락도 없다 — `m`, `r`, `q`만 동작한다.
-`--manual-calib`은 바로 클릭으로 넘어가고, 그 뒤에도 리뷰는 그대로 뜬다.
+자동 검출이 아무것도 못 찾으면 수락할 것이 없다 — `m`, `r`, `q`만 동작한다. 창은 그래도
+뜬다. 카메라 뷰 옆에 빨간 *no screen boundary found*가 나오므로 멈춘 것처럼 보이지 않는다.
+키 목록은 콘솔뿐 아니라 그림 하단에도 그려진다. 리그 앞에서는 터미널이 풀스크린 프로젝터
+뒤에 있기 때문이다. `--manual-calib`은 바로 클릭으로 넘어가고, 그 뒤에도 리뷰는 그대로 뜬다.
 
 무인 실행처럼 키를 누를 사람이 없으면
 [configs/live.yaml](projector_distortion/configs/live.yaml)에

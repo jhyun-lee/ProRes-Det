@@ -10,6 +10,7 @@ Offline (default, no hardware):
 
 Live rig (webcam + projector):
     python demo.py --live
+    python demo.py --live --screen 2
     python demo.py --live --save-every 30 --debug-view
 
 Which models run is a property of the install, not of the command: the restoration
@@ -18,7 +19,9 @@ checkpoint and its confidence floor from configs/detection.yaml. Set
 `detector.backend: none` there to run restoration only.
 
 The rig itself - which monitor the projector is on, which webcam watches it, and the
-projector->camera latency - is configs/live.yaml.
+projector->camera latency - is configs/live.yaml. --screen and --camera override the
+first two for one run, the same way they do on `Data.py capture`; the latency has no
+flag, because it is measured once per rig and never differs between two runs on it.
 
 Restore and detect only. Scoring the result against ground truth - detection mAP and
 restoration PSNR/SSIM - is evaluate.py's job.
@@ -39,7 +42,7 @@ from projector_distortion.cli import (  # noqa: E402
     DEFAULT_INPUT, DEFAULT_LIVE_BG, DEFAULT_LIVE_VIDEO, DEFAULT_OUTPUT,
     box_filter_kwargs, build_models, run_dir,
 )
-from projector_distortion.config import load_config, resolve_path  # noqa: E402
+from projector_distortion.config import load_config, pick, resolve_path  # noqa: E402
 from projector_distortion.utils.recording import (  # noqa: E402
     FRAME_KINDS, KIND_DIRS, RunRecorder,
 )
@@ -64,6 +67,12 @@ def build_parser():
     live = p.add_argument_group("live mode")
     live.add_argument("--live", action="store_true", help="drive a webcam + projector")
     live.add_argument("--clip", default=DEFAULT_LIVE_VIDEO, help="clip to project")
+    live.add_argument("--screen", type=int, default=None,
+                      help="monitor index for the projector, 0 = primary "
+                           "(default: rig.screen in configs/live.yaml; "
+                           "`python Data.py check` prints the table)")
+    live.add_argument("--camera", type=int, default=None,
+                      help="webcam index (default: rig.camera in configs/live.yaml)")
     live.add_argument("--manual-calib", action="store_true",
                       help="click the 4 corners instead of auto-detecting them")
     live.add_argument("--debug-view", action="store_true",
@@ -109,7 +118,11 @@ def _run_live(args, restorer, detector, rec, box_filter):
 
     from projector_distortion.pipeline.live import run_live  # noqa: F401
 
-    # Which monitor, which webcam and how far it lags are the rig's, not the run's.
+    # The rig belongs to the machine, so it is configured rather than flagged. The two
+    # exceptions are which monitor and which webcam: those are the settings someone
+    # gets wrong on the first run of a session, and `Data.py capture` already lets them
+    # be corrected without editing a file. `offset` deliberately stays config-only - it
+    # is measured once per rig and does not differ between two runs on it.
     try:
         rig = load_config("live").get("rig") or {}
     except (FileNotFoundError, ImportError) as e:
@@ -128,7 +141,8 @@ def _run_live(args, restorer, detector, rec, box_filter):
     # clip, and pick the analysis stride by measuring it.
     return run_live(
         clip, restorer, detector, rec, background=background,
-        camera=int(rig.get("camera", 0)), screen=int(rig.get("screen", 1)),
+        camera=int(pick(args.camera, rig, "camera", default=0)),
+        screen=int(pick(args.screen, rig, "screen", default=1)),
         cam_backend=str(rig.get("cam_backend", "auto")),
         offset=int(rig.get("offset", 6)), detector_name=detector.name,
         review_calib=bool(rig.get("review_calibration", True)),

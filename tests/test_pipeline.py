@@ -272,8 +272,13 @@ class _FakeCam:
         return True, self.frame.copy()
 
 
-def _review(monkeypatch, keys, points=GOOD_QUAD, manual=None, auto=None):
-    """Drive review_calibration through a scripted list of keypresses."""
+def _review(monkeypatch, keys, points=GOOD_QUAD, manual=None, auto=None, shown=None):
+    """
+    Drive review_calibration through a scripted list of keypresses.
+
+    `shown` collects (window, image) for every imshow, which is how the tests below
+    check that the operator was actually given something to look at.
+    """
     from projector_distortion.pipeline import live
 
     pressed = iter(keys)
@@ -283,9 +288,15 @@ def _review(monkeypatch, keys, points=GOOD_QUAD, manual=None, auto=None):
         # projector window must not eat a scripted keypress.
         return next(pressed) if delay == 0 else 0
 
-    monkeypatch.setattr(live.cv2, "imshow", lambda *a, **k: None)
+    def fake_imshow(window, image):
+        if shown is not None:
+            shown.append((window, image))
+
+    monkeypatch.setattr(live.cv2, "imshow", fake_imshow)
     monkeypatch.setattr(live.cv2, "destroyWindow", lambda *a, **k: None)
     monkeypatch.setattr(live.cv2, "waitKey", fake_wait)
+    monkeypatch.setattr(live.cv2, "setWindowProperty", lambda *a, **k: None)
+    monkeypatch.setattr(live.cv2, "namedWindow", lambda *a, **k: None)
     monkeypatch.setattr(live, "manual_calibrate",
                         lambda cam, **k: manual() if callable(manual) else manual)
     monkeypatch.setattr(live, "auto_calibrate",
@@ -342,6 +353,44 @@ def test_review_with_nothing_to_show_cannot_be_accepted(monkeypatch):
     corners.
     """
     assert _review(monkeypatch, [ord("a"), ord("q")], points=None) is None
+
+
+def test_review_still_shows_the_camera_when_calibration_failed(monkeypatch):
+    """
+    A failed detection is the moment the operator most needs to see the camera.
+
+    The gate blocks on waitKey either way. Showing nothing leaves them staring at the
+    projector's background with no idea the run is waiting for them, which reads as a
+    hang - and the console line telling them what to press is behind the fullscreen
+    projector window they are looking at.
+    """
+    shown = []
+    _review(monkeypatch, [ord("q")], points=None, shown=shown)
+    assert shown, "the review gate showed no window at all with no calibration"
+    window, image = shown[-1]
+    assert image is not None and image.size, "the window was shown with no image"
+
+
+def test_review_shows_the_before_after_when_calibration_worked(monkeypatch):
+    """The working case must keep showing the pre/post figure it always did."""
+    shown = []
+    _review(monkeypatch, [ord("a")], shown=shown)
+    assert shown, "the review gate showed no window for a good calibration"
+
+
+def test_the_hint_bar_puts_the_keys_on_the_figure_itself():
+    """
+    The operator is at the rig watching this window, not the terminal - and on the
+    rig the terminal is behind a fullscreen projector.
+    """
+    from projector_distortion.utils.visualize import warp_before_after
+
+    pre = np.full((240, 320, 3), 60, np.uint8)
+    post = np.full((180, 320, 3), 90, np.uint8)
+    plain = warp_before_after(pre, post)
+    hinted = warp_before_after(pre, post, hint="a accept    q quit")
+    assert hinted.shape[0] > plain.shape[0], "the hint bar added no height"
+    assert hinted.shape[1] == plain.shape[1], "the hint bar must not change width"
 
 
 def test_live_analyses_an_evenly_spaced_subset():

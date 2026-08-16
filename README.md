@@ -116,6 +116,13 @@ rig:
   offset: 6      # projector → camera latency, in frames
 ```
 
+`--screen` and `--camera` override the first two for a single run, which is what a
+wrong guess costs instead of an edit:
+
+```bash
+python demo.py --live --screen 2
+```
+
 Every option, input and output: [README_running.md](README_running.md).
 
 Collecting your own data is `Data.py`, which dispatches to the scripts under `data/`:

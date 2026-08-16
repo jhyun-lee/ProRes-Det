@@ -28,6 +28,10 @@ PANEL_FONT_SCALE = 0.55
 # Width of the arrow column between the two tiles of the before/after warp figure.
 WARP_ARROW_W = 80
 
+# Bottom bar carrying the key bindings, on the figures that are also a prompt.
+HINT_BAR_H = 30
+HINT_TEXT = (120, 60, 0)
+
 
 def draw_detections(img, detections, color=BOX_COLOR, thickness=2,
                     scale=LABEL_SCALE) -> np.ndarray:
@@ -128,7 +132,8 @@ def draw_quad(frame, points, title=None, thickness=2) -> np.ndarray:
     return canvas
 
 
-def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.ndarray:
+def warp_before_after(pre, post, points=None, tile_w=640, labels=None,
+                      hint=None) -> np.ndarray:
     """
     The raw camera view next to the rectified one, with the arrow between them.
 
@@ -136,6 +141,10 @@ def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.nda
     model input - so each tile keeps its own aspect ratio and the sizes go into the
     captions. `points` draws the calibration quad on the left tile, which is what
     makes a mis-ordered or drifted warp obvious.
+
+    `hint` adds a bar of key bindings along the bottom. Prompts that block the run
+    need it: the operator is at the rig looking at this window, and the console line
+    saying what to press is behind the fullscreen projector.
     """
     # Length, not truthiness: `points` is routinely a numpy (4, 2), and testing an
     # array for truth raises rather than being falsy.
@@ -152,7 +161,7 @@ def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.nda
     tile_h = max(t.shape[0] for t in tiles)
 
     canvas_w = PANEL_GAP * 2 + tile_w * 2 + WARP_ARROW_W
-    canvas_h = PANEL_GAP * 2 + tile_h + PANEL_LABEL_H
+    canvas_h = PANEL_GAP * 2 + tile_h + PANEL_LABEL_H + (HINT_BAR_H if hint else 0)
     canvas = np.full((canvas_h, canvas_w, 3), PANEL_BG, np.uint8)
 
     for i, tile in enumerate(tiles):
@@ -172,4 +181,8 @@ def warp_before_after(pre, post, points=None, tile_w=640, labels=None) -> np.nda
                     PANEL_TEXT, 3, cv2.LINE_AA, tipLength=0.4)
     cv2.putText(canvas, "warp", (mid_x + 14, mid_y - 14), FONT, 0.5, PANEL_TEXT, 1,
                 cv2.LINE_AA)
+
+    if hint:
+        cv2.putText(canvas, hint, (PANEL_GAP, canvas_h - HINT_BAR_H // 3), FONT, 0.6,
+                    HINT_TEXT, 1, cv2.LINE_AA)
     return canvas
