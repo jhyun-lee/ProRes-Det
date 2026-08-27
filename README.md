@@ -125,6 +125,8 @@ python demo.py --live --screen 2
 
 Every option, input and output: [README_running.md](README_running.md).
 
+![The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the `(distorted, light)` pairs come from exactly this setup.](Image/BeamPro.jpg)
+
 Collecting your own data is `Data.py`, which dispatches to the scripts under `data/`:
 
 ```bash
@@ -167,7 +169,7 @@ ProRes-Det/
 ├── weights/                  3 checkpoints, 51 MiB, tracked in git
 ├── data/                     SampleData/ (train · eval · test), live/ clips, and the
 │                             collection scripts Data.py drives; 349 MiB tracked
-├── Image/                    the two figures above
+├── Image/                    the figures above
 └── output/                   run artefacts (git-ignored)
 ```
 

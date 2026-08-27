@@ -123,6 +123,8 @@ python demo.py --live --screen 2
 
 모든 옵션과 입출력: [README_running.ko.md](README_running.ko.md).
 
+![촬영 리그: 위쪽의 단초점 프로젝터, 같은 암에 달린 카메라, 투사 패턴 아래 테이블에 놓인 물체들 — `(distorted, light)` 쌍은 정확히 이 구성에서 나온다.](Image/BeamPro.jpg)
+
 직접 데이터를 수집하는 것은 `Data.py`이고, `data/` 아래 스크립트로 분기한다:
 
 ```bash
@@ -163,7 +165,7 @@ ProRes-Det/
 ├── weights/                  체크포인트 3개, 51 MiB, git 추적
 ├── data/                     SampleData/ (train · eval · test), live/ 클립, 그리고
 │                             Data.py가 구동하는 수집 스크립트들. 추적 349 MiB
-├── Image/                    위 그림 2장
+├── Image/                    위 그림들
 └── output/                   실행 산출물 (git 무시)
 ```
 
