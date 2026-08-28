@@ -6,8 +6,9 @@
 데이터셋 수집은 저장소 루트의 `Data.py`가 담당하며 `data/` 아래 스크립트로 분기한다.
 [data/README_data.ko.md](data/README_data.ko.md)에서 다룬다.
 
-- [공용 플래그](#공용-플래그)
+- [설정 파일이 가진 것](#설정-파일이-가진-것)
 - [`demo.py` — 복원 → 검출](#demopy--복원--검출)
+- [`demo.py --video-pair` — 녹화본 재생](#demopy---video-pair--녹화본-재생)
 - [`demo.py --live` — 웹캠 + 프로젝터](#demopy---live--웹캠--프로젝터)
 - [`evaluate.py` — 복원 전후 점수 비교](#evaluatepy--복원-전후-점수-비교)
 - [`train.py` — 복원기 재학습](#trainpy--복원기-재학습)
@@ -63,6 +64,7 @@
 | `--limit N` | `0` | 처리할 쌍 수 상한. `0` = 전부 |
 | `--save-every N` | `1` | 이미지 저장 간격. `0`이면 csv만 |
 | `--video` | off | 2×2 패널을 `result.mp4`로도 기록 |
+| `--no-detect` | off | 복원만. `detection.yaml`을 고치지 않고 |
 | `--device cuda\|cpu` | 있으면 cuda | — |
 
 이미지는 JPEG 품질 92로 저장된다. 박스 크기 게이트는 `configs/detection.yaml`의
@@ -74,11 +76,79 @@ python demo.py --input /path/to/pairs
 python demo.py --limit 5 --save-every 0
 ```
 
-검출 없이 복원만 하려면 `configs/detection.yaml`에 `detector.backend: none`을 넣는다.
-검출기 비교는 `evaluate.py`의 일이다 — 거기서 백엔드 리스트가 백엔드당 한 행이 된다.
+검출 없이 복원만 하려면 `--no-detect`를 주거나, 모든 실행의 기본값으로 만들려면
+`configs/detection.yaml`에 `detector.backend: none`을 넣는다. 검출기 비교는
+`evaluate.py`의 일이다 — 거기서 백엔드 리스트가 백엔드당 한 행이 된다.
 
 `--save-every 0`은 이미지를 전혀 쓰지 않는다. csv와 요약만 필요할 때 그렇게 한다.
 실행마다 `output/<timestamp>/`가 따로 생기므로 반복 실행이 서로 덮어쓰지 않는다.
+
+---
+
+## `demo.py --video-pair` — 녹화본 재생
+
+`Data.py record`는 투사 중인 클립을 카메라 시점에서 raw mp4 하나로 찍는다. 이 모드가 그걸
+재생한다: 녹화본이 `distorted` 쪽, 그것이 찍힐 때 투사되던 클립이 `light` 쪽, 결과는
+`result.mp4` 하나. 하드웨어도 리그도 필요 없다.
+
+```bash
+python demo.py --video-pair data/recordings/rec_0828145219.mp4
+python demo.py --video-pair data/recordings/rec_0828145219.mp4 --no-detect                --video-out restored
+```
+
+| | 기본값 | 변경 |
+|---|---|---|
+| 녹화본 | — (필수) | `--video-pair <mp4>` |
+| 투사 클립 | 녹화본 `.json`이 투사했다고 적어둔 것 | `--clip <mp4>` |
+| 출력 | `output/<timestamp>/result.mp4` + `calib/` | `--output <dir>` |
+| 저장할 뷰 | 하나 — 2×2 패널 | `--video-out <kind>...` |
+
+| 옵션 | 기본값 | 의미 |
+|---|---|---|
+| `--video-out <kind>...` | `panel` | `panel`(2×2), `restored`(복원 프레임만), `compare`(distorted ‖ restored). 여러 개 가능 |
+| `--offset-ms F` | `rig.offset`를 `CAM_FPS`로 환산 — 200 ms | 프로젝터 → 카메라 지연 |
+| `--manual-calib` | off | 화면 네 모서리를 자동 검출 대신 직접 클릭 |
+| `--no-review` | off | 캘리브레이션 확인 창을 건너뛴다. 무인 실행용 |
+
+**클립을 지정할 필요가 없다.** `Data.py record`가 무엇을 투사했는지 mp4 옆 `.json`에 써두고,
+기본값이 거기서 온다 — `train_light_1.mp4`로 찍은 세션은 알려주지 않아도
+`train_light_1.mp4`로 재생된다. 시작 줄이 무엇을 골랐고 그 답이 어디서 왔는지 찍는다:
+
+```
+clip: test_light.mp4 (from the recording's .json)
+```
+
+`--clip`은 사이드카가 없는 녹화본, 또는 리그 기계에서 찍고 그 경로가 없는 곳에서 돌릴 때를
+위해 남아 있다. 사이드카와 어긋나는 클립을 주면 나중에 눈치채도록 방치하지 않고 경고한다 —
+틀린 클립으로 재생해도 실행은 끝까지 되고, 영상도 나오고, 카메라가 본 적 없는 light로
+복원한 결과가 나온다.
+
+**한 번 훑고, 지정한 만큼 뷰를 쓴다.** `--video-out restored panel`은 같은 복원에서
+`result_restored.mp4`와 `result_panel.mp4`를 쓴다 — 프레임은 한 번만 복원하고 합성만 두 번
+하므로 두 번째 영상은 거의 공짜다. 뷰가 하나면 다른 모드와 같은 `result.mp4` 이름을 쓴다.
+
+```bash
+python demo.py --video-pair rec.mp4 --no-detect --video-out restored panel
+```
+
+**길이는 맞출 필요 없다.** 3분짜리 클립에 `--seconds 30`으로 찍어도 된다. 짝짓기가 프레임
+인덱스가 아니라 타임스탬프 기준이고, 클립은 녹화가 끝난 지점 너머로는 읽지 않는다.
+
+**프레임률은 가정하지 않고 읽는다.** 기준 녹화본은 카메라가 10.03 fps로 나오는 동안
+프로젝터는 28.01 fps를 냈다. 카메라 100번 프레임은 투사 280번 프레임이다 — 인덱스로 짝지었다면
+1/3 뒤처진 light로 복원했을 것이다. 두 프레임률 모두 사이드카 `.json`에서 오고, 없으면 파일
+헤더로 폴백한다. `result.mp4`는 카메라 실측 프레임률을 달고 나가므로 실시간 속도로 재생된다.
+
+**워프는 녹화본 안에서 찾는다.** `record`는 정류하지 않은 raw 프레임을 쓰므로, 화면은 카메라
+프레임 어딘가의 사다리꼴이다. 녹화본 전체에서 한 번 위치를 잡고 그 호모그래피 하나로 전
+프레임을 정류한다 — `--live`가 쓰는 것과 같은 단일 캘리브레이션 모델이다. 라이브가 흑백을
+번갈아 쏴서 화면을 찾는 방식은 이미 찍힌 영상에 쓸 수 없으므로, 대신 **프레임 간 절대차**에서
+찾는다. 밝기로는 안 된다 — 기준 리그는 밝은 방의 흰 보드에 투사해서 주변이 화면만큼 밝다.
+움직임으로는 된다: 투사 영역만 변하기 때문에 사각형 안 150/255 대 바깥 2/255로 갈린다. 찾은
+사각형과 그것이 정류한 결과를 실행 전에 화면에 띄워 확인을 받고, 어느 쪽이든 `calib/`에 쓴다.
+
+여기에는 PSNR/SSIM이 없고 `evaluate.py`로 채점할 수도 없다. 그러려면 아무것도 투사되지 않은
+장면의 `surface` 촬영이 필요한데, 녹화본은 첫 프레임부터 마지막까지 빛을 받고 있다.
 
 ---
 

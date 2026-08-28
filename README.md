@@ -16,6 +16,7 @@ the difference — mAP, PSNR, SSIM.
 
 | Guide | Covers |
 |---|---|
+| [COMMANDS.md](COMMANDS.md) | Every command and flag in one lookup table, plus the interactive keys |
 | [README_running.md](README_running.md) | `demo.py` · `evaluate.py` · `train.py` — every option, input, output |
 | [projector_distortion/README_code.md](projector_distortion/README_code.md) | What each module owns, the call graph, the public API |
 | [data/README_data.md](data/README_data.md) | The three splits, layout, filename rules, both label formats, every `Data.py` stage |
@@ -62,6 +63,7 @@ python train.py --epochs 30       # retrain the restorer             → runs/<t
 python demo.py --live             # webcam + projector rig           → output/<timestamp>/
 python Data.py capture_warp       # collect your own data (see below) → data/Create_Data/warp_<MMDD>/
 python Data.py record --screen 2  # project + record, no models      → data/recordings/
+python demo.py --video-pair data/recordings/rec_<t>.mp4   # replay that recording → result.mp4
 ```
 
 The first three need no arguments. Sample data and all three checkpoints are tracked in
@@ -123,6 +125,21 @@ wrong guess costs instead of an edit:
 python demo.py --live --screen 2
 ```
 
+The rig and the models do not have to be on the same machine, or in the same week.
+`Data.py record` projects a clip and records the camera's view as one raw mp4 with no
+models loaded; `demo.py --video-pair` turns that file back into a run — rectifying it,
+pairing every camera frame with the clip frame that caused it, and writing the restored
+video:
+
+```bash
+python Data.py record --screen 2 --seconds 30              # on the rig
+python demo.py --video-pair data/recordings/rec_<t>.mp4    # anywhere, later
+```
+
+One argument is enough: the `.json` `record` writes beside the mp4 already names the
+clip that was projected and the rate the camera actually managed, so neither has to be
+supplied. `--video-out restored panel` writes both views from the one restoration pass.
+
 Every option, input and output: [README_running.md](README_running.md).
 
 ![The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the `(distorted, light)` pairs come from exactly this setup.](Image/BeamPro.jpg)
@@ -149,11 +166,81 @@ at step 2.
 
 ---
 
-## 3. Layout
+## 3. Reference results
+
+What this repository produces as shipped, so a run can be checked against it rather
+than taken on trust. Reproduce with the commands in each caption — no flags beyond the
+split, and no edits except where noted.
+
+### Detection, before vs after restoration
+
+`sample_test` is the headline: it is held out, it is 9× the size of `sample_eval`, and
+no checkpoint here was fitted on it.
+
+**`sample_test`** — 200 pairs, 5 scenes, 2,131 ground-truth box instances
+
+| Backend | Source | P | R | F1 | mAP@0.5 | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|
+| yolo | distorted | 0.8143 | 0.7611 | 0.7868 | 0.7804 | 1622 | 370 | 509 |
+| yolo | **restored** | 0.9977 | 0.9986 | 0.9981 | **0.9952** | 2128 | 5 | 3 |
+| | | | | | **+0.2148** | | | |
+| ssd | distorted | 0.5428 | 0.7236 | 0.6203 | 0.7091 | 1542 | 1299 | 589 |
+| ssd | **restored** | 0.9861 | 0.9977 | 0.9918 | **0.9968** | 2126 | 30 | 5 |
+| | | | | | **+0.2877** | | | |
+
+**`sample_eval`** — 22 pairs, 10 scenes, 225 ground-truth box instances
+
+| Backend | Source | P | R | F1 | mAP@0.5 | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|
+| yolo | distorted | 0.8627 | 0.8933 | 0.8777 | 0.8843 | 201 | 32 | 24 |
+| yolo | **restored** | 1.0000 | 1.0000 | 1.0000 | **1.0000** | 225 | 0 | 0 |
+| | | | | | **+0.1157** | | | |
+| ssd | distorted | 0.6793 | 0.8756 | 0.7650 | 0.8086 | 197 | 93 | 28 |
+| ssd | **restored** | 0.9956 | 1.0000 | 0.9978 | **1.0000** | 225 | 1 | 0 |
+| | | | | | **+0.1914** | | | |
+
+The gain holds across two architectures that share nothing but the images they are
+handed, so it is a property of the restoration rather than of one detector.
+
+### Restoration quality
+
+| Split | PSNR distorted | PSNR restored | gain | SSIM distorted | SSIM restored | gain |
+|---|---|---|---|---|---|---|
+| `sample_test` | 16.812 dB | 22.741 dB | +5.929 | 0.7189 | 0.8924 | +0.1735 |
+| `sample_eval` | 13.760 dB | 26.928 dB | +13.168 | 0.7051 | 0.9227 | +0.2176 |
+
+PSNR and SSIM do not depend on the detector, so one row per split covers both backends.
+
+Note the two move in opposite directions between the splits: `sample_eval` gains far
+more PSNR while `sample_test` gains far more mAP. Pixel fidelity and detectability are
+not the same axis, which is the reason this project scores both.
+
+### Reproducing
+
+```bash
+python evaluate.py                                       # sample_eval, ssd
+python evaluate.py --input data/SampleData/sample_test                    --gt    data/SampleData/sample_test   # sample_test, ssd
+```
+
+`ssd` is the default detector, so those two commands reproduce the `ssd` rows exactly.
+The `yolo` rows need one edit, because the detector is configured and never flagged —
+set `detector.backend: [yolo, ssd]` in
+[configs/detection.yaml](projector_distortion/configs/detection.yaml) and each entry
+becomes a row of the same report. That also opts into AGPL-3.0; see
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+Numbers were produced on the checkpoints tracked in this repository at
+`detector.conf: 0.25` and `--iou 0.5`, the shipped defaults. Restoration is
+deterministic, so a rerun on the same weights reproduces these to the printed digits;
+a different GPU may move the last decimal.
+
+---
+
+## 4. Layout
 
 ```
 ProRes-Det/
-├── demo.py                   restore → detect, end to end (offline / --live)
+├── demo.py                   restore → detect, end to end (offline / --live / --video-pair)
 ├── evaluate.py               detection before/after + restoration quality
 ├── train.py                  fine-tune the restoration model
 ├── Data.py                   dataset collection: one entry point for every data/ stage
@@ -162,10 +249,10 @@ ProRes-Det/
 ├── projector_distortion/     the library → README_code.md
 │   ├── configs/              default settings (YAML)
 │   ├── models/               restoration + detection models
-│   ├── pipeline/             offline / live run loops
+│   ├── pipeline/             offline / live / replay run loops
 │   └── utils/                image, visualization, recording and display helpers
 │
-├── tests/                    pytest suite, 118 tests
+├── tests/                    pytest suite, 151 tests
 ├── weights/                  3 checkpoints, 51 MiB, tracked in git
 ├── data/                     SampleData/ (train · eval · test), live/ clips, and the
 │                             collection scripts Data.py drives; 349 MiB tracked
@@ -178,7 +265,7 @@ What each module owns and how they call each other:
 
 ---
 
-## 4. Configuration
+## 5. Configuration
 
 ```
 configs/*.yaml  <  CLI flags
@@ -209,7 +296,7 @@ directory.
 
 ---
 
-## 5. Swapping modules
+## 6. Swapping modules
 
 ### Add a detector
 
@@ -286,7 +373,7 @@ Why that convention matters, and how the loss enforces it:
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 ```bash
 python -m pytest -q
@@ -294,9 +381,46 @@ python -m pytest -q
 
 ---
 
-## 7. License
+## 8. License
 
-MIT. See [LICENSE](LICENSE).
+MIT for this project's own source, data and restoration weights — see
+[LICENSE](LICENSE).
+
+The repository also redistributes third-party artefacts under their own licences. One
+of them, `weights/detector_yolo11s.pt`, is **AGPL-3.0**, because it is a fine-tune of
+an Ultralytics YOLO11 checkpoint. The default configuration does not use it: the
+shipped `detector.backend` is `ssd`, torchvision's BSD-licensed SSDLite, so an
+out-of-the-box run touches only MIT/BSD/Apache code. Selecting `yolo` opts into
+AGPL-3.0.
+
+Full accounting, upstream links and the architectures this work reimplements:
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+---
+
+## 9. Citation
+
+If this software is useful in your research, please cite it. A DOI is minted per
+release by Zenodo; use the one matching the version you ran.
+
+```bibtex
+@software{lee_prores_det,
+  author  = {Lee, JeongHyun},
+  title   = {{ProRes-Det: Projector Restoration and Detection}},
+  year    = {2026},
+  version = {1.0.0},
+  doi     = {TODO},
+  url     = {https://github.com/jhyun-lee/ProRes-Det}
+}
+```
+
+---
+
+## 10. Contact
+
+Questions, bug reports and attribution corrections:
+[ljhyun0821@gnu.ac.kr](mailto:ljhyun0821@gnu.ac.kr), or open an issue on the
+repository.
 
 ---
 

@@ -3,7 +3,7 @@
 What each module owns, how a run flows through them, and the public API.
 
 Script options are in [README_running.md](../README_running.md). The extension recipe for a
-new detector or restorer is in [README.md](../README.md#5-swapping-modules).
+new detector or restorer is in [README.md](../README.md#6-swapping-modules).
 
 - [Call graph](#call-graph)
 - [Files](#files)
@@ -29,9 +29,11 @@ demo.py / evaluate.py / train.py
    ├─ data.find_samples          distorted ↔ light ↔ surface ↔ label, by filename
    │  data.index_triplets        training only: complete triplets
    │
-   ├─ pipeline.run_offline       ─┐
-   │  pipeline.run_live          ─┤ loop
-   │     └─ pipeline.process_sample
+   ├─ pipeline.run_offline       ─┐  folders of stills
+   │  pipeline.run_live          ─┤  webcam + projector
+   │  pipeline.run_replay        ─┤  a recording + the clip it was shot against
+   │     └─ pipeline.process_sample     (offline: reads the pair off disk)
+   │        pipeline.process_pair       (live/replay: the pair is already in memory)
    │            ├─ restorer.restore_full
    │            ├─ detector(distorted) · detector(restored)
    │            ├─ models.filter_detections
@@ -43,8 +45,10 @@ demo.py / evaluate.py / train.py
 `evaluate.py` skips `run_offline` and drives `process_sample` itself, because it scores
 per sample instead of recording frames.
 
-`pipeline/__init__.py` exposes `run_live` as a lazy proxy, so an offline run never loads
-the webcam and Win32 window plumbing (`utils/display.py`) it has no use for.
+`pipeline/__init__.py` exposes `run_live` and `run_replay` as lazy proxies, so an
+offline run never loads the webcam and Win32 window plumbing (`utils/display.py`) it has
+no use for. `replay.py` reaches for `live.py`'s warp helpers inside its functions rather
+than at import, because `demo.py` has to read `VIDEO_OUT_KINDS` just to build its parser.
 
 ---
 
@@ -89,8 +93,9 @@ training patch and the 640×360 inference size behave identically.
 
 | File | Owns |
 |---|---|
-| [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_sample` (one pair end to end), `build_panel`, `run_offline`. No hardware |
+| [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_pair` (one in-memory pair), `process_sample` (the same, read off disk, plus ground truth), `build_panel`, `run_offline`. No hardware |
 | [`pipeline/live.py`](pipeline/live.py) | Webcam opening, black/white-flash calibration, homography + warp, the restore/detect worker thread, the writer thread, stride auto-tuning |
+| [`pipeline/replay.py`](pipeline/replay.py) | `run_replay` — a `Data.py record` mp4 against the clip it was shot against. `Alignment` (timestamp pairing), `ClipReader` (forward-only decode), `calibration_frames` + `detect_screen` (finding the screen in finished footage), `clip_for` / `replay_fps` (the sidecar), `build_frame` / `video_targets` (the output views). No hardware |
 
 `live.py` runs three threads: the main loop projects and captures, a worker restores and
 detects, a writer encodes. Queue depths are `MAX_IN_FLIGHT = 3` and
@@ -98,7 +103,14 @@ detects, a writer encodes. Queue depths are `MAX_IN_FLIGHT = 3` and
 frames with the first `STRIDE_DISCARD = 2` thrown away, because CUDA autotuning makes
 frame 1 roughly 50× the steady-state cost.
 
-Window titles: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_FirstFrame`.
+Window titles: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_FirstFrame`,
+and `Replay_Calibration` for the replay prompt.
+
+`replay.py` cannot flash the screen the way `live.py` calibrates - the footage is
+already shot - so it finds the projection in the frame-to-frame absolute difference
+instead. Brightness does not work: the reference rig projects onto a white board in a
+lit room, so the surround is as bright as the screen. Motion does, because only the
+projection changes: 150/255 inside the quad against 2/255 outside.
 
 ### `utils/`
 
@@ -106,7 +118,7 @@ Window titles: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_Firs
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
 | [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`. One video writer per requested view — `result.mp4` for a single one, `result_<kind>.mp4` when a run asks for several |
 | [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 monitor enumeration and borderless placement |
 
 `display.py` is separate because getting a window onto the projector is not a pipeline
@@ -208,7 +220,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 
 ## Tests
 
-118 tests, no hardware needed.
+151 tests, no hardware needed.
 
 | File | Covers |
 |---|---|
@@ -216,6 +228,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 | [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | Filename ids, sample discovery, PSNR/SSIM/IoU, `RunRecorder` behaviour, triplet indexing, `average_precision`, the argparse defaults, unknown-backend handling, the `live._worker` queue contract driven with stubs, `device_note`, the `requirements-cuda.txt` pins |
 | [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig` and its tags, every toggle building and training one step, forward shapes, checkpoint round trip, the shipped weights, the restorer registry with a third-party backend |
 | [`../tests/test_detection.py`](../tests/test_detection.py) | Registry, label normalisation, the box size gate, both backends against the real checkpoints |
+| [`../tests/test_replay.py`](../tests/test_replay.py) | `demo.py --video-pair` without a rig: timestamp pairing against index pairing, the sidecar's rates and clip, finding the screen on a surround as bright as it, one video per named view, the prompt window sizing |
 | [`../tests/test_collect.py`](../tests/test_collect.py) | `data/warp.py` and `data/make_light.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the rectified stage output and its debug figure |
 
 ```bash

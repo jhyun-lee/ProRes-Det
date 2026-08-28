@@ -6,8 +6,9 @@ one-liners that just work, see [README.md](README.md).
 Dataset collection is `Data.py` at the repo root, which dispatches to the scripts under
 `data/`; it is documented in [data/README_data.md](data/README_data.md).
 
-- [Shared flags](#shared-flags)
+- [What the config files own](#what-the-config-files-own)
 - [`demo.py` — restore → detect](#demopy--restore--detect)
+- [`demo.py --video-pair` — replay a recording](#demopy---video-pair--replay-a-recording)
 - [`demo.py --live` — webcam + projector](#demopy---live--webcam--projector)
 - [`evaluate.py` — score before vs after](#evaluatepy--score-before-vs-after)
 - [`train.py` — retrain the restorer](#trainpy--retrain-the-restorer)
@@ -65,6 +66,7 @@ that is `evaluate.py`'s job.
 | `--limit N` | `0` | Cap how many pairs are processed. `0` = all |
 | `--save-every N` | `1` | Image save interval. `0` keeps the csv only |
 | `--video` | off | Also write the 2×2 panels as `result.mp4` |
+| `--no-detect` | off | Restoration only, without editing `detection.yaml` |
 | `--device cuda\|cpu` | cuda if present | — |
 
 Images are written at JPEG quality 92. Box size gating comes from
@@ -76,13 +78,86 @@ python demo.py --input /path/to/pairs
 python demo.py --limit 5 --save-every 0
 ```
 
-To restore without detecting, set `detector.backend: none` in
-`configs/detection.yaml`. Comparing detectors is `evaluate.py`'s job — that is where a
-list of backends produces one row each.
+To restore without detecting, pass `--no-detect`, or set `detector.backend: none` in
+`configs/detection.yaml` to make it the default for every run. Comparing detectors is
+`evaluate.py`'s job — that is where a list of backends produces one row each.
 
 `--save-every 0` writes no images at all, which is what you want when only the csv and
 the summary matter. Each run lands in its own `output/<timestamp>/`, so repeated runs
 never overwrite each other.
+
+---
+
+## `demo.py --video-pair` — replay a recording
+
+`Data.py record` shoots the camera's view of a projected clip as one raw mp4. This
+replays it: the recording is the `distorted` half, the clip it was shot against is the
+`light` half, and one `result.mp4` comes out. No hardware, no rig.
+
+```bash
+python demo.py --video-pair data/recordings/rec_0828142253.mp4
+python demo.py --video-pair data/recordings/rec_0828142253.mp4 --no-detect \
+               --video-out restored
+```
+
+| | Default | Change it with |
+|---|---|---|
+| Recording | — (required) | `--video-pair <mp4>` |
+| Projected clip | whatever the recording's `.json` says was projected | `--clip <mp4>` |
+| Output | `output/<timestamp>/result.mp4` + `calib/` | `--output <dir>` |
+| Views written | one — the 2×2 panel | `--video-out <kind>...` |
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--video-out <kind>...` | `panel` | `panel` (2×2), `restored` (the restored frame alone), `compare` (distorted ‖ restored). Several are allowed |
+| `--offset-ms F` | `rig.offset` at `CAM_FPS` — 200 ms | Projector → camera latency |
+| `--manual-calib` | off | Click the 4 screen corners instead of finding them |
+| `--no-review` | off | Skip the calibration verdict window, for an unattended run |
+
+**One pass, as many views as you name.** `--video-out restored panel` writes
+`result_restored.mp4` and `result_panel.mp4` from the same restoration — the frames are
+restored once and only the compositing is done twice, so the second video is nearly
+free. A single view keeps the plain `result.mp4` name every other mode writes.
+
+```bash
+python demo.py --video-pair rec.mp4 --no-detect --video-out restored panel
+```
+
+**You do not have to name the clip.** `Data.py record` wrote which one it projected
+into the `.json` beside the mp4, and that is where the default comes from — so a
+session shot against `train_light_1.mp4` replays against `train_light_1.mp4` without
+being told. The startup line says which clip was picked and where the answer came
+from:
+
+```
+clip: test_light.mp4 (from the recording's .json)
+```
+
+`--clip` is still there for a recording whose sidecar is missing, or one shot on the
+rig machine and replayed somewhere the recorded path does not exist. Passing a clip
+that disagrees with the sidecar is warned about rather than left to be noticed later —
+replaying against the wrong clip completes, writes a video, and restores against light
+the camera never saw.
+
+**Lengths need not match.** `--seconds 30` against a 3-minute clip is fine: pairing is
+by timestamp, not by frame index, and the clip is simply not read past where the
+recording ends.
+
+**The rates are read, not assumed.** The reference recording came off the camera at
+10.03 fps while the projector managed 28.01, so camera frame 100 is projected frame
+280 — pairing by index would restore each frame against light from a third of the way
+back. Both rates come from the sidecar `.json`; without it they fall back to the file
+headers. `result.mp4` carries the camera's measured rate, so it plays in real time.
+
+**The warp is found in the recording.** `record` writes raw, unrectified frames, so
+the screen is a trapezoid somewhere in the camera frame. It is located once, on the
+whole recording, and every frame is rectified with that one homography — the same
+single-calibration model `--live` uses. The quad and what it rectifies to are held on
+screen for a verdict before the run starts, and written to `calib/` either way.
+
+There is no PSNR/SSIM here and `evaluate.py` cannot score the result: that needs a
+`surface` shot of the scene with nothing projected on it, and a recording is lit from
+the first frame to the last.
 
 ---
 

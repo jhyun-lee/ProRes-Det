@@ -14,6 +14,7 @@
 
 | 문서 | 담당 |
 |---|---|
+| [COMMANDS.ko.md](COMMANDS.ko.md) | 모든 명령어와 플래그를 담은 조회표, 대화형 단축키 포함 |
 | [README_running.ko.md](README_running.ko.md) | `demo.py` · `evaluate.py` · `train.py` — 모든 옵션, 입력, 출력 |
 | [projector_distortion/README_code.ko.md](projector_distortion/README_code.ko.md) | 모듈별 책임, 호출 그래프, 공개 API |
 | [data/README_data.ko.md](data/README_data.ko.md) | 세 개의 split, 구조, 파일명 규칙, 라벨 포맷 두 가지, `Data.py` 전 스테이지 |
@@ -60,6 +61,7 @@ python train.py --epochs 30       # 복원기 재학습         → runs/<tag>/
 python demo.py --live             # 웹캠 + 프로젝터 리그   → output/<timestamp>/
 python Data.py capture_warp       # 직접 수집 (아래 참고)  → data/Create_Data/warp_<MMDD>/
 python Data.py record --screen 2  # 투사 + 녹화, 모델 없음 → data/recordings/
+python demo.py --video-pair data/recordings/rec_<t>.mp4   # 그 녹화본 재생 → result.mp4
 ```
 
 앞 세 개는 인자가 필요 없다. 샘플 데이터와 체크포인트 3개가 git에 추적되므로 클론 직후 바로
@@ -121,6 +123,20 @@ rig:
 python demo.py --live --screen 2
 ```
 
+리그와 모델이 같은 기계에 있을 필요도, 같은 주에 있을 필요도 없다. `Data.py record`는 모델을
+하나도 올리지 않고 클립을 투사하며 카메라 시점을 raw mp4 하나로 녹화한다. `demo.py
+--video-pair`는 그 파일을 다시 실행으로 되돌린다 — 정류하고, 카메라 프레임마다 그것을 만든
+클립 프레임을 짝지어, 복원된 영상을 쓴다:
+
+```bash
+python Data.py record --screen 2 --seconds 30              # 리그에서
+python demo.py --video-pair data/recordings/rec_<t>.mp4    # 나중에, 아무 데서나
+```
+
+인자는 하나면 된다. `record`가 mp4 옆에 쓰는 `.json`이 투사한 클립과 카메라가 실제로 낸
+프레임률을 이미 담고 있어, 둘 다 따로 알려줄 필요가 없다. `--video-out restored panel`을 주면
+한 번의 복원으로 두 가지 뷰를 모두 쓴다.
+
 모든 옵션과 입출력: [README_running.ko.md](README_running.ko.md).
 
 ![촬영 리그: 위쪽의 단초점 프로젝터, 같은 암에 달린 카메라, 투사 패턴 아래 테이블에 놓인 물체들 — `(distorted, light)` 쌍은 정확히 이 구성에서 나온다.](Image/BeamPro.jpg)
@@ -145,11 +161,79 @@ python Data.py capture_warp --screen 2  # 투사·촬영·정류: 10장면 × 50
 
 ---
 
-## 3. 구조
+## 3. 기준 결과
+
+이 레포가 배포 상태 그대로 내는 수치다. 믿고 넘어가는 대신 자기 실행과 대조하라고
+적어둔다. 각 캡션의 명령으로 재현되며, split 지정 외에 플래그는 없고 명시된 곳
+말고는 수정도 없다.
+
+### 복원 전후 검출
+
+`sample_test`가 대표 수치다. held-out이고, `sample_eval`의 9배 크기이며, 여기 있는
+어떤 체크포인트도 이것으로 학습되지 않았다.
+
+**`sample_test`** — 200쌍, 5장면, GT 박스 인스턴스 2,131개
+
+| 백엔드 | 대상 | P | R | F1 | mAP@0.5 | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|
+| yolo | distorted | 0.8143 | 0.7611 | 0.7868 | 0.7804 | 1622 | 370 | 509 |
+| yolo | **restored** | 0.9977 | 0.9986 | 0.9981 | **0.9952** | 2128 | 5 | 3 |
+| | | | | | **+0.2148** | | | |
+| ssd | distorted | 0.5428 | 0.7236 | 0.6203 | 0.7091 | 1542 | 1299 | 589 |
+| ssd | **restored** | 0.9861 | 0.9977 | 0.9918 | **0.9968** | 2126 | 30 | 5 |
+| | | | | | **+0.2877** | | | |
+
+**`sample_eval`** — 22쌍, 10장면, GT 박스 인스턴스 225개
+
+| 백엔드 | 대상 | P | R | F1 | mAP@0.5 | TP | FP | FN |
+|---|---|---|---|---|---|---|---|---|
+| yolo | distorted | 0.8627 | 0.8933 | 0.8777 | 0.8843 | 201 | 32 | 24 |
+| yolo | **restored** | 1.0000 | 1.0000 | 1.0000 | **1.0000** | 225 | 0 | 0 |
+| | | | | | **+0.1157** | | | |
+| ssd | distorted | 0.6793 | 0.8756 | 0.7650 | 0.8086 | 197 | 93 | 28 |
+| ssd | **restored** | 0.9956 | 1.0000 | 0.9978 | **1.0000** | 225 | 1 | 0 |
+| | | | | | **+0.1914** | | | |
+
+건네받는 이미지 말고는 아무것도 공유하지 않는 두 아키텍처에서 모두 개선이 나온다.
+검출기 하나의 특성이 아니라 복원의 특성이라는 뜻이다.
+
+### 복원 품질
+
+| Split | PSNR distorted | PSNR restored | 개선 | SSIM distorted | SSIM restored | 개선 |
+|---|---|---|---|---|---|---|
+| `sample_test` | 16.812 dB | 22.741 dB | +5.929 | 0.7189 | 0.8924 | +0.1735 |
+| `sample_eval` | 13.760 dB | 26.928 dB | +13.168 | 0.7051 | 0.9227 | +0.2176 |
+
+PSNR·SSIM은 검출기와 무관하므로 split당 한 행이 두 백엔드를 모두 덮는다.
+
+두 split에서 방향이 엇갈리는 것을 보라. `sample_eval`은 PSNR 개선이 훨씬 크고,
+`sample_test`는 mAP 개선이 훨씬 크다. 픽셀 충실도와 검출 가능성은 같은 축이 아니고,
+이 프로젝트가 둘 다 채점하는 이유가 그것이다.
+
+### 재현
+
+```bash
+python evaluate.py                                       # sample_eval, ssd
+python evaluate.py --input data/SampleData/sample_test                    --gt    data/SampleData/sample_test   # sample_test, ssd
+```
+
+`ssd`가 기본 검출기이므로 위 두 명령이 `ssd` 행을 그대로 재현한다. `yolo` 행은 수정
+한 번이 필요하다. 검출기는 플래그가 아니라 설정이기 때문이다 —
+[configs/detection.yaml](projector_distortion/configs/detection.yaml)에서
+`detector.backend: [yolo, ssd]`로 두면 항목마다 같은 리포트의 한 행이 된다. 이때
+AGPL-3.0에 동의하는 것이 된다. [THIRD_PARTY.md](THIRD_PARTY.md) 참고.
+
+수치는 이 레포에 추적된 체크포인트로, 배포 기본값인 `detector.conf: 0.25`와
+`--iou 0.5`에서 나온 것이다. 복원은 결정적이라 같은 가중치로 다시 돌리면 표기된
+자릿수까지 재현되고, GPU가 다르면 마지막 소수점이 움직일 수 있다.
+
+---
+
+## 4. 구조
 
 ```
 ProRes-Det/
-├── demo.py                   복원 → 검출, 엔드투엔드 (오프라인 / --live)
+├── demo.py                   복원 → 검출, 엔드투엔드 (오프라인 / --live / --video-pair)
 ├── evaluate.py               검출 전후 비교 + 복원 품질
 ├── train.py                  복원 모델 파인튜닝
 ├── Data.py                   데이터셋 수집: data/ 전 스테이지의 단일 진입점
@@ -158,10 +242,10 @@ ProRes-Det/
 ├── projector_distortion/     라이브러리 → README_code.ko.md
 │   ├── configs/              기본 설정 (YAML)
 │   ├── models/               복원 + 검출 모델
-│   ├── pipeline/             오프라인 / 라이브 실행 루프
+│   ├── pipeline/             오프라인 / 라이브 / 재생 실행 루프
 │   └── utils/                이미지, 시각화, 기록, 디스플레이 헬퍼
 │
-├── tests/                    pytest 스위트, 118개
+├── tests/                    pytest 스위트, 151개
 ├── weights/                  체크포인트 3개, 51 MiB, git 추적
 ├── data/                     SampleData/ (train · eval · test), live/ 클립, 그리고
 │                             Data.py가 구동하는 수집 스크립트들. 추적 349 MiB
@@ -174,7 +258,7 @@ ProRes-Det/
 
 ---
 
-## 4. 설정
+## 5. 설정
 
 ```
 configs/*.yaml  <  CLI 플래그
@@ -204,7 +288,7 @@ config 안의 상대 경로는 프로젝트 루트 기준으로 해석된다. �
 
 ---
 
-## 5. 모듈 교체
+## 6. 모듈 교체
 
 ### 검출기 추가
 
@@ -278,7 +362,7 @@ restored = (distorted - residual).clamp(-1, 1)
 
 ---
 
-## 6. 테스트
+## 7. 테스트
 
 ```bash
 python -m pytest -q
@@ -286,9 +370,44 @@ python -m pytest -q
 
 ---
 
-## 7. 라이선스
+## 8. 라이선스
 
-MIT. [LICENSE](LICENSE) 참고.
+이 프로젝트의 소스·데이터·복원 가중치는 MIT다 — [LICENSE](LICENSE) 참고.
+
+레포는 제3자 산출물도 각자의 라이선스로 함께 배포한다. 그중
+`weights/detector_yolo11s.pt`는 Ultralytics YOLO11 체크포인트의 파인튜닝이라
+**AGPL-3.0**이다. 기본 설정은 이 파일을 쓰지 않는다. 배포 기본값
+`detector.backend`가 `ssd`(torchvision의 BSD 라이선스 SSDLite)이므로, 손대지 않은
+상태의 실행은 MIT/BSD/Apache 코드만 거친다. `yolo`를 고르면 AGPL-3.0에 동의하는 것이
+된다.
+
+전체 내역·업스트림 링크·재구현한 아키텍처 출처:
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+---
+
+## 9. 인용
+
+연구에 도움이 됐다면 인용해달라. 릴리스마다 Zenodo가 DOI를 발급하므로, 실제로 돌린
+버전에 해당하는 것을 쓰면 된다.
+
+```bibtex
+@software{lee_prores_det,
+  author  = {Lee, JeongHyun},
+  title   = {{ProRes-Det: Projector Restoration and Detection}},
+  year    = {2026},
+  version = {1.0.0},
+  doi     = {TODO},
+  url     = {https://github.com/jhyun-lee/ProRes-Det}
+}
+```
+
+---
+
+## 10. 연락
+
+질문·버그 신고·출처 표기 정정:
+[ljhyun0821@gnu.ac.kr](mailto:ljhyun0821@gnu.ac.kr), 또는 레포에 이슈를 남겨달라.
 
 ---
 

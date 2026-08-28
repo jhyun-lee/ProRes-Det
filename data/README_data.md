@@ -506,9 +506,19 @@ a *video*. It projects a clip at its own fps and records the camera's view as on
 No restoration, no detection, no weights loaded — so it runs on a machine that has none.
 
 It stands outside the session folders the other stages share: one mp4 is not the
-distorted/light/surface triplets a training set is made of, so there is nothing for `warp`
-or `train.py` to pick up. Use it to capture raw distorted footage before there is a
+distorted/light/surface triplets a training set is made of, so there is nothing here for
+`warp` or `train.py` to pick up. Use it to capture raw distorted footage before there is a
 checkpoint, or to prove a rig works end to end.
+
+What reads the result is `demo.py --video-pair`, which pairs the recording back with the
+clip it was shot against and restores it into one video — rectifying as it goes, because
+what `record` writes is raw. See
+[--video-pair in README_running.md](../README_running.md#demopy---video-pair--replay-a-recording).
+
+```bash
+python Data.py record --screen 2 --seconds 30           # rig: shoot it
+python demo.py --video-pair data/recordings/rec_<t>.mp4 # anywhere: restore it
+```
 
 | | Default | Change it with |
 |---|---|---|

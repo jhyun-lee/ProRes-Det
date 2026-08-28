@@ -27,6 +27,37 @@ All three are fine-tuned on the same 17-class projector-distortion dataset — 1
 checkpoint carries the same 17 names internally, and those win over the config's list.
 torchvision has no names, so `ssd` always uses the config's list.
 
+### How the detectors were trained
+
+Read back out of `detector_yolo11s.pt` itself, so it cannot drift from the file:
+
+| | |
+|---|---|
+| Base model | `yolo11s.pt`, COCO-pretrained |
+| Epochs · image size · batch | 50 · 640 · 16 |
+| Seed | 0 |
+| Ultralytics version · date | 8.4.61 · 2026-06-18 |
+| Its own validation split | mAP@0.5 **0.9939**, mAP@0.5:0.95 0.9484, P 0.9854, R 0.9958 |
+
+`detector_ssdlite.pth` is a bare `state_dict` and carries no training record; it was
+fine-tuned on the same annotated set.
+
+**Why the restored scores sit where they do.** On clean images this detector is already
+at ~0.99 mAP — that is its own held-out validation figure above, measured before any of
+this project's restoration existed. So the restored-side mAP of 0.9952 on `sample_test`
+and 1.0000 on `sample_eval` (see [Reference results](../README.md#3-reference-results))
+is the detector meeting its own ceiling on images restoration has brought back close to
+clean, not the restoration inventing headroom. The number to read is the *gain* over
+the distorted input, which is +0.2148 on the held-out split.
+
+> **Split disclosure.** The detectors were fine-tuned before these three splits were
+> cut, and the annotated pool they were trained on is not distributed here — only
+> `dataset.yaml` is named inside the checkpoint, with no path that survives. Whether
+> any `sample_eval` scene appears in that pool is therefore not answerable from this
+> repository alone, and `sample_eval` should be read as a demonstration split rather
+> than as a detector benchmark. `sample_test` was annotated separately, in LabelMe
+> format, and is the split the reference table leads with for that reason.
+
 ---
 
 ## Where the paths come from
@@ -150,7 +181,7 @@ an Optuna sweep on this dataset. Implementation: [train.py](../train.py).
 > A custom restorer that emits surface directly still satisfies the `BaseRestorer` interface.
 > In that case the `residual` visualisation and the `residual_mean` metric lose their
 > meaning, and both advantages above are gone. See
-> [Swapping modules](../README.md#5-swapping-modules).
+> [Swapping modules](../README.md#6-swapping-modules).
 
 ---
 

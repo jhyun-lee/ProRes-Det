@@ -3,7 +3,7 @@
 모듈별 책임, 실행이 모듈을 타고 흐르는 경로, 공개 API.
 
 스크립트 옵션은 [README_running.ko.md](../README_running.ko.md)에 있다. 새 검출기·복원기를
-붙이는 방법은 [README.ko.md](../README.ko.md#5-모듈-교체)에 있다.
+붙이는 방법은 [README.ko.md](../README.ko.md#6-모듈-교체)에 있다.
 
 - [호출 그래프](#호출-그래프)
 - [파일](#파일)
@@ -29,9 +29,11 @@ demo.py / evaluate.py / train.py
    ├─ data.find_samples          파일명으로 distorted ↔ light ↔ surface ↔ label 짝짓기
    │  data.index_triplets        학습 전용: 완성된 삼중쌍
    │
-   ├─ pipeline.run_offline       ─┐
-   │  pipeline.run_live          ─┤ 루프
-   │     └─ pipeline.process_sample
+   ├─ pipeline.run_offline       ─┐  정지 이미지 폴더
+   │  pipeline.run_live          ─┤  웹캠 + 프로젝터
+   │  pipeline.run_replay        ─┤  녹화본 + 그때 투사되던 클립
+   │     └─ pipeline.process_sample     (오프라인: 디스크에서 쌍을 읽음)
+   │        pipeline.process_pair       (라이브/재생: 쌍이 이미 메모리에 있음)
    │            ├─ restorer.restore_full
    │            ├─ detector(distorted) · detector(restored)
    │            ├─ models.filter_detections
@@ -43,8 +45,10 @@ demo.py / evaluate.py / train.py
 `evaluate.py`는 `run_offline`을 건너뛰고 `process_sample`을 직접 돌린다. 프레임을 기록하는
 대신 샘플별로 채점하기 때문이다.
 
-`pipeline/__init__.py`는 `run_live`를 지연 프록시로 노출한다. 덕분에 오프라인 실행은 쓸 일
-없는 웹캠·Win32 창 배관(`utils/display.py`)을 아예 로드하지 않는다.
+`pipeline/__init__.py`는 `run_live`와 `run_replay`를 지연 프록시로 노출한다. 덕분에 오프라인
+실행은 쓸 일 없는 웹캠·Win32 창 배관(`utils/display.py`)을 아예 로드하지 않는다. `replay.py`도
+`live.py`의 워프 헬퍼를 import 시점이 아니라 함수 안에서 가져온다 — `demo.py`가 파서를 만들
+때 `VIDEO_OUT_KINDS`만 읽어야 하기 때문이다.
 
 ---
 
@@ -88,15 +92,22 @@ fully convolutional이므로 180×320 학습 패치와 640×360 추론 크기가
 
 | 파일 | 담당 |
 |---|---|
-| [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_sample` (한 쌍 엔드투엔드), `build_panel`, `run_offline`. 하드웨어 불필요 |
+| [`pipeline/offline.py`](pipeline/offline.py) | `FrameResult`, `process_pair` (메모리 상의 한 쌍), `process_sample` (같은 일을 디스크에서 읽어서, GT까지), `build_panel`, `run_offline`. 하드웨어 불필요 |
 | [`pipeline/live.py`](pipeline/live.py) | 웹캠 열기, 흑/백 플래시 캘리브레이션, homography + 워프, 복원/검출 워커 스레드, 라이터 스레드, stride 자동 결정 |
+| [`pipeline/replay.py`](pipeline/replay.py) | `run_replay` — `Data.py record` mp4를 그때 투사되던 클립과 짝지어 재생. `Alignment`(타임스탬프 짝짓기), `ClipReader`(전진 전용 디코드), `calibration_frames` + `detect_screen`(다 찍힌 영상에서 화면 찾기), `clip_for` / `replay_fps`(사이드카), `build_frame` / `video_targets`(출력 뷰). 하드웨어 불필요 |
 
 `live.py`는 스레드 3개로 돈다. 메인 루프가 투사·촬영하고, 워커가 복원·검출하고, 라이터가
 인코딩한다. 큐 깊이는 `MAX_IN_FLIGHT = 3`, `MAX_PENDING_WRITES = 8`. 분석 stride는
 `STRIDE_WARMUP = 12` 프레임에서 앞 `STRIDE_DISCARD = 2`개를 버린 뒤 한 번만 고정된다. CUDA
 autotuning 때문에 1번 프레임이 정상 상태의 약 50배가 걸리기 때문이다.
 
-창 제목: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_FirstFrame`.
+창 제목: `Projector_Display`, `Combined_View`, `PreWarp_Debug`, `Warp_FirstFrame`, 그리고
+재생 모드의 확인 창인 `Replay_Calibration`.
+
+`replay.py`는 `live.py`처럼 화면을 번갈아 쏴서 캘리브레이션할 수 없다 — 영상은 이미 찍혔다.
+대신 프레임 간 절대차에서 투사 영역을 찾는다. 밝기로는 안 된다: 기준 리그는 밝은 방의 흰
+보드에 투사해서 주변이 화면만큼 밝다. 움직임으로는 된다. 투사 영역만 변하기 때문에 사각형
+안 150/255 대 바깥 2/255로 갈린다.
 
 ### `utils/`
 
@@ -104,7 +115,7 @@ autotuning 때문에 1번 프레임이 정상 상태의 약 50배가 걸리기 �
 |---|---|
 | [`utils/image.py`](utils/image.py) | `read_bgr`, `resize`, `bgr_to_tensor` / `tensor_to_bgr` / `residual_to_bgr`, `psnr`, `ssim`, `iou`, `IMAGE_EXT` |
 | [`utils/visualize.py`](utils/visualize.py) | `draw_detections`, `caption`, `grid_2x2`, `panel_size`, `draw_quad`, `warp_before_after` |
-| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS` |
+| [`utils/recording.py`](utils/recording.py) | `RunRecorder`, `FRAME_KINDS`, `KIND_DIRS`. 요청한 뷰마다 영상 라이터 하나 — 하나면 `result.mp4`, 여러 개면 `result_<kind>.mp4` |
 | [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 모니터 열거와 테두리 없는 배치 |
 
 `display.py`를 따로 둔 이유는 창을 프로젝터로 보내는 일이 파이프라인의 관심사가 아니고,
@@ -203,7 +214,7 @@ for i, s in enumerate(find_samples(root, root)):
 
 ## 테스트
 
-118개, 하드웨어 불필요.
+151개, 하드웨어 불필요.
 
 | 파일 | 커버 |
 |---|---|
@@ -211,6 +222,7 @@ for i, s in enumerate(find_samples(root, root)):
 | [`../tests/test_pipeline.py`](../tests/test_pipeline.py) | 파일명 id, 샘플 탐색, PSNR/SSIM/IoU, `RunRecorder` 동작, 삼중쌍 인덱싱, `average_precision`, argparse 기본값, 미등록 백엔드 처리, 스텁으로 구동한 `live._worker` 큐 계약, `device_note`, `requirements-cuda.txt` 핀 |
 | [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig`와 tag, 모든 토글의 빌드 + 1스텝 학습, forward 크기, 체크포인트 왕복, 기본 가중치, 서드파티 백엔드로 검증한 복원기 레지스트리 |
 | [`../tests/test_detection.py`](../tests/test_detection.py) | 레지스트리, 라벨 정규화, 박스 크기 게이트, 실제 체크포인트로 두 백엔드 검증 |
+| [`../tests/test_replay.py`](../tests/test_replay.py) | 리그 없이 되는 `demo.py --video-pair`: 인덱스가 아닌 시간축 짝짓기, 사이드카의 실측 fps와 클립 경로, 화면만큼 밝은 주변에서 투사 영역 검출, 지정한 뷰마다 영상 1개, 프롬프트 창 크기 |
 | [`../tests/test_collect.py`](../tests/test_collect.py) | 리그 없이 되는 `data/warp.py`·`data/make_light.py`: 코너 정렬, 경계 리샘플링, `boundary` vs `homography` 동등성, 정류 단계 출력과 debug 그림 |
 
 ```bash

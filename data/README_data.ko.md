@@ -483,9 +483,18 @@ python train.py --data-root data/Create_Data/warp_0813
 없고 가중치도 로드하지 않으므로, 가중치가 없는 기기에서도 돈다.
 
 다른 스테이지가 공유하는 세션 폴더 밖에 있다. mp4 하나는 학습 세트를 이루는
-distorted/light/surface 삼중쌍이 아니므로 `warp`나 `train.py`가 집어갈 것이 없다.
+distorted/light/surface 삼중쌍이 아니므로 여기서 `warp`나 `train.py`가 집어갈 것은 없다.
 체크포인트가 나오기 전에 원본 왜곡 영상을 확보하거나, 리그가 끝까지 동작하는지 확인하는 데
 쓴다.
+
+결과를 읽는 것은 `demo.py --video-pair`다. 녹화본을 그것이 찍힐 때 투사되던 클립과 다시
+짝지어 영상 하나로 복원한다 — `record`가 쓰는 것은 raw이므로 정류도 그때 한다.
+[README_running.ko.md의 --video-pair](../README_running.ko.md#demopy---video-pair--녹화본-재생) 참고.
+
+```bash
+python Data.py record --screen 2 --seconds 30           # 리그에서: 찍는다
+python demo.py --video-pair data/recordings/rec_<t>.mp4 # 아무 데서나: 복원한다
+```
 
 | | 기본값 | 변경 |
 |---|---|---|

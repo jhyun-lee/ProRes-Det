@@ -1,0 +1,450 @@
+# Command reference
+
+Every command this project accepts, in one place. Options are grouped by the script
+that owns them; defaults are what actually runs, including the ones that come from a
+config file rather than the flag.
+
+For *why* a setting lives where it does, see [README_running.md](README_running.md).
+This page is the lookup table, not the explanation.
+
+- [At a glance](#at-a-glance)
+- [Install](#install)
+- [`demo.py` — restore → detect](#demopy--restore--detect)
+- [`evaluate.py` — score before vs after](#evaluatepy--score-before-vs-after)
+- [`train.py` — retrain the restorer](#trainpy--retrain-the-restorer)
+- [`Data.py` — collect a dataset](#datapy--collect-a-dataset)
+- [Keys at the interactive prompts](#keys-at-the-interactive-prompts)
+- [Tests](#tests)
+- [Where output lands](#where-output-lands)
+- [Settings that have no flag](#settings-that-have-no-flag)
+
+---
+
+## At a glance
+
+Run everything from the repo root.
+
+| Command | Needs a rig | Does |
+|---|:---:|---|
+| `python demo.py` | — | Restore + detect the 22 bundled eval pairs |
+| `python demo.py --video-pair <mp4>` | — | Replay a recording into a restored video |
+| `python demo.py --live` | **yes** | Drive the webcam + projector live |
+| `python evaluate.py` | — | Score before vs after: mAP, PSNR, SSIM |
+| `python train.py` | — | Retrain the restorer on `sample_train` |
+| `python Data.py` | — | List the collection stages |
+| `python Data.py check` | **yes** | List monitors, preview the webcam |
+| `python Data.py make_light` | — | Video → the light frames to project |
+| `python Data.py capture` | **yes** | Project and shoot → raw captures |
+| `python Data.py capture_warp` | **yes** | The same, rectifying as it shoots |
+| `python Data.py warp` | — | Raw captures → rectified, aligned pairs |
+| `python Data.py record` | **yes** | Project a clip and record it, no models |
+| `python -m pytest -q` | — | 151 tests |
+
+The first three of `demo` / `evaluate` / `train` need no arguments: the sample data and
+all three checkpoints are tracked in git, so a fresh clone runs as-is.
+
+An editable install also puts three console scripts on the PATH. They are thin wrappers
+around the same files and take the identical flags:
+
+| Console script | Same as |
+|---|---|
+| `pdf-demo` | `python demo.py` |
+| `pdf-evaluate` | `python evaluate.py` |
+| `pdf-train` | `python train.py` |
+
+---
+
+## Install
+
+Python ≥ 3.9.
+
+| Command | Installs |
+|---|---|
+| `pip install -e ".[all]" -r requirements-cuda.txt` | Everything, GPU build of torch |
+| `pip install -e ".[all]"` | Everything, CPU-only torch |
+| `pip install -e ".[yolo]"` | The `yolo` detector backend |
+| `pip install -e ".[train]"` | What `train.py` needs |
+| `pip install -e ".[live]"` | `--live` on non-Windows |
+| `pip install -e ".[test]"` | pytest |
+
+Quote the brackets — they are glob characters in zsh.
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+# 2.9.0+cu128 True
+```
+
+`requirements-cuda.txt` is needed because the default PyPI `torch` carries no CUDA on
+Windows. Every entry point prints the device it resolved as its first line, so a run
+that quietly fell back to the CPU says so.
+
+---
+
+## `demo.py` — restore → detect
+
+Three modes in one script. Which one runs is decided by the flags, not a subcommand:
+nothing = offline, `--video-pair` = replay, `--live` = the rig. `--live` and
+`--video-pair` together are refused.
+
+### Shared
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--input <dir>` | `data/SampleData/sample_eval` | Folder of `distorted/` + `light/` pairs (offline) |
+| `--output <dir>` | `output` | Where run folders go |
+| `--limit N` | `0` | Process at most N frames. `0` = all |
+| `--no-detect` | off | Restoration only, without editing `detection.yaml` |
+| `--save-every N` | `1` | Write images every N frames. `0` = csv only |
+| `--device cuda\|cpu` | cuda if present | — |
+| `--clip <mp4>` | see below | The projected clip. Live plays it; replay pairs against it |
+
+`--clip` defaults differently per mode: live plays `data/live/test_light.mp4`, replay
+uses whatever the recording's `.json` says was actually projected.
+
+### Offline (default)
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--video` | off | Also write the 2×2 panels as `result.mp4` |
+
+```bash
+python demo.py
+python demo.py --input data/SampleData/sample_test
+python demo.py --limit 5 --save-every 0
+python demo.py --input /path/to/pairs --video
+```
+
+### Replay — `--video-pair`
+
+Two mp4s in, one or more out. No hardware.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--video-pair <mp4>` | — (required) | A `Data.py record` mp4 to replay |
+| `--video-out <kind>...` | `panel` | `panel` (2×2) · `restored` (alone) · `compare` (side by side). Several allowed |
+| `--offset-ms F` | `200` | Projector → camera latency. From `rig.offset` (6) at `CAM_FPS` (30) |
+| `--manual-calib` | off | Click the 4 screen corners instead of finding them |
+| `--no-review` | off | Skip the calibration verdict window, for an unattended run |
+
+```bash
+python demo.py --video-pair data/recordings/rec_0828145219.mp4
+python demo.py --video-pair rec.mp4 --no-detect --video-out restored
+python demo.py --video-pair rec.mp4 --video-out restored panel
+python demo.py --video-pair rec.mp4 --clip data/live/train_light_1.mp4
+python demo.py --video-pair rec.mp4 --no-review --save-every 0
+```
+
+One `--video-out` writes `result.mp4`; several write one `result_<kind>.mp4` each, off
+a single restoration pass.
+
+### Live — `--live`
+
+Needs a webcam pointed at a screen a projector is throwing to.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--live` | off | Drive the rig |
+| `--screen N` | `rig.screen` (`1`) | Monitor the projector is on. `0` = primary |
+| `--camera N` | `rig.camera` (`0`) | Webcam index |
+| `--manual-calib` | off | Click the 4 corners instead of auto-detecting |
+| `--debug-view` | off | Extra window: the pre-warp feed with the quad on it |
+
+```bash
+python demo.py --live
+python demo.py --live --screen 2
+python demo.py --live --save-every 30 --debug-view
+```
+
+---
+
+## `evaluate.py` — score before vs after
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--input <dir>` | `data/SampleData/sample_eval` | Pairs to score |
+| `--gt <dir>` | `data/SampleData/sample_eval` | Where `surface/` and `labels/` live |
+| `--output <dir>` | `output` | Where the report goes |
+| `--limit N` | `0` | Score at most N pairs. `0` = all |
+| `--iou F` | `0.5` | IoU threshold for a true positive |
+
+```bash
+python evaluate.py
+python evaluate.py --input data/SampleData/sample_test --gt data/SampleData/sample_test
+python evaluate.py --iou 0.75 --limit 10
+```
+
+`--input` and `--gt` take the same path for every bundled split, because each split
+carries its own `surface/` and `labels/` beside `distorted/`.
+
+Scoring several detectors in one report is a config edit, not a flag — put a list in
+`detector.backend` and each entry becomes a row.
+
+---
+
+## `train.py` — retrain the restorer
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--data-root <dir>` | `train.data` in `restoration.yaml` | Training pairs |
+| `--gt <dir>` | under `--data-root` | Where `surface/` lives when it is not under `--data-root` |
+| `--out <dir>` | `runs` | Where checkpoints go |
+| `--epochs N` | `30` | From `train.epochs` |
+| `--batch-size N` | `4` | From `train.batch_size` |
+| `--lr F` | `0.0002` | From `train.lr` |
+| `--sample N` | `0` | Cap the triplet count — a seeded random draw. `0` = all |
+| `--resume <ckpt>` | — | Continue from a checkpoint |
+| `--no-amp` | off | Disable mixed precision |
+| `--device cuda\|cpu` | cuda if present | — |
+
+```bash
+python train.py
+python train.py --epochs 60 --batch-size 8
+python train.py --sample 200 --epochs 2          # a quick smoke run
+python train.py --data-root data/Create_Data/warp_0813
+python train.py --resume runs/<tag>/best.pt
+```
+
+The architecture is **not** a flag. Ablations are the `ablation:` block in
+`restoration.yaml`; the run directory and checkpoint name pick up a tag naming what was
+turned off, so a variant stays identifiable from its path.
+
+---
+
+## `Data.py` — collect a dataset
+
+One entry point that dispatches to the standalone scripts under `data/`. Each stage
+keeps its own `--help`, and running the script directly is equivalent.
+
+```bash
+python Data.py                  # list the stages
+python Data.py capture --help   # that stage's options
+python data/warp.py --review    # identical to `python Data.py warp --review`
+```
+
+| Stage | Script | Needs a rig |
+|---|---|:---:|
+| `check` | `data/check.py` | **yes** |
+| `make_light` | `data/make_light.py` | — |
+| `capture` | `data/capture.py` | **yes** |
+| `capture_warp` | `data/capture.py --warp` | **yes** |
+| `warp` | `data/warp.py` | — |
+| `record` | `data/record.py` | **yes** |
+
+### `check` — monitors + webcam
+
+| Option | Default |
+|---|---|
+| `--camera N` | `capture.camera` (`0`) |
+
+```bash
+python Data.py check
+python Data.py check --camera 1
+```
+
+### `make_light` — video → light frames
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--src <path>...` | the three `train_light_*.mp4` | Video files, or folders of them |
+| `--out <dir>` | `data/Create_Data/projected` | — |
+| `--step N` | `30` | Keep every Nth frame. 30 = one per second at 30fps |
+| `--augment <mode>` | `full` | `full` (6×) · `invert` (2×) · `none` (1×) |
+| `--limit N` | `0` | At most N *source* frames per video, before augmentation |
+
+```bash
+python Data.py make_light
+python Data.py make_light --src /path/clip.mp4 --step 15
+python Data.py make_light --augment none --limit 100
+```
+
+`test_light.mp4` is left out on purpose, so a set collected here shares no projected
+frame with the held-out split.
+
+### `capture` — projector + webcam → raw captures
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--raw <dir>` | `data/Create_Data/raw_<MMDD>` | Add to a specific capture folder |
+| `--screen N` | `capture.screen` (`1`) | Monitor the projector is on |
+| `--camera N` | `capture.camera` (`0`) | — |
+| `--rounds N` | `10` | Scene setups; each starts with a fresh surface shot |
+| `--limit N` | `50` | Light frames drawn per round. `0` = every frame |
+| `--settle-ms N` | `1200` | How long a light frame is held before its capture is kept |
+| `--warp` | off | Also rectify as you shoot (this is `capture_warp`) |
+
+```bash
+python Data.py capture --screen 2
+python Data.py capture_warp --screen 2
+python Data.py capture --rounds 20 --limit 25      # 500 pairs over 20 scenes
+python Data.py capture --rounds 4 --limit 250      # 1,000 pairs over 4 scenes
+```
+
+Defaults are 10 scenes × 50 = **500 pairs**. `--limit 0` means every frame in the pool,
+which after a default `make_light` is thousands on a single scene — the wrong trade for
+restoration, which needs many surfaces rather than many lights on one.
+
+### `warp` — raw captures → aligned pairs
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--raw <dir>` | the newest `raw_<MMDD>` | Which capture folder to rectify |
+| `--out <dir>` | `warp_<MMDD>` matching the raw | — |
+| `--mode <m>` | `boundary` | `boundary` · `homography` · `tps` (needs OpenCV < 5) |
+| `--limit N` | `0` | Process at most N scenes |
+| `--review` | off | Check every scene on screen and fix the bad ones |
+| `--manual` | off | Click the corners on every scene |
+| `--redetect` | off | Re-run detection instead of reusing recorded corners |
+
+```bash
+python Data.py warp
+python Data.py warp --review
+python Data.py warp --mode homography
+python Data.py warp --raw data/Create_Data/raw_0813
+```
+
+This stage is not optional: the screen is a trapezoid in the camera, so nothing before
+it is trainable, and a session that only has `raw/` is not a layout the loaders
+recognise.
+
+### `record` — project and record, no models
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--clip <mp4>` | `data/live/test_light.mp4` | Clip to project |
+| `--screen N` | `record.screen` (`1`) | Monitor the projector is on |
+| `--camera N` | `record.camera` (`0`) | — |
+| `--seconds F` | `0` | Stop after N seconds. `0` = no limit |
+| `--loop` | off | Restart the clip instead of stopping at its end |
+| `--warp` | off | Calibrate once and record the rectified screen |
+| `--out <path>` | `data/recordings/rec_<MMDDHHMMSS>.mp4` | — |
+
+```bash
+python Data.py record --screen 2 --seconds 30
+python Data.py record --clip data/live/train_light_1.mp4 --loop
+python Data.py record --warp
+```
+
+Recording starts as soon as the window is up — no keypress. Leave `--warp` off if the
+recording is going to `demo.py --video-pair`, which rectifies it itself.
+
+---
+
+## Keys at the interactive prompts
+
+Every window that blocks a run, and what it takes. `enter` and `space` are
+interchangeable with `a` wherever both are listed.
+
+| Where | Key | Does |
+|---|---|---|
+| `capture` framing preview | `s` · `enter` · `space` | Keep this shot as the round's `surface` |
+| | `c` | Freeze the frame and click the 4 corners |
+| | `r` | Back to auto-detection after clicking |
+| | `q` · `esc` | Stop the session |
+| `warp --review` | `enter` · `space` · `a` | Accept this scene |
+| | `A` | Accept this and every scene after it |
+| | `m` | Click the 4 corners by hand |
+| | `r` | Re-run the detector |
+| | `s` | Skip this scene |
+| | `q` | Stop; scenes already written are kept |
+| `demo.py --live` calibration | `enter` · `space` · `a` | Accept the warp and start |
+| | `m` | Click the 4 corners |
+| | `r` | Re-run calibration |
+| | `q` | Abort the run |
+| `demo.py --video-pair` calibration | `enter` · `a` | Accept the warp and start |
+| | `m` | Click the 4 corners |
+| | `q` | Abort the run |
+| Corner clicking (any mode) | left click ×4 | Place the corners, any order |
+| | `u` | Undo the last corner |
+| | `q` | Abort |
+| `--live` / `record` running | `q` | Stop early |
+
+---
+
+## Tests
+
+| Command | Runs |
+|---|---|
+| `python -m pytest -q` | All 151 |
+| `python -m pytest tests/test_replay.py -q` | The replay pipeline alone |
+| `python -m pytest -q -k "align or clip"` | Anything matching the expression |
+| `python -m pytest -q --collect-only` | List without running |
+
+No hardware needed for any of them. Tests that need a checkpoint or an optional module
+skip cleanly when it is absent rather than failing.
+
+| File | Covers |
+|---|---|
+| `tests/test_pipeline.py` | Filename ids, sample discovery, metrics, `RunRecorder`, argparse defaults, the live worker contract |
+| `tests/test_replay.py` | Timestamp pairing, the sidecar, screen detection, multi-video output, window sizing |
+| `tests/test_restoration.py` | Config tags, every ablation toggle, checkpoint round trip, the shipped weights |
+| `tests/test_detection.py` | Registry, label normalisation, the size gate, both backends |
+| `tests/test_collect.py` | `data/warp.py` and `data/make_light.py` without a rig |
+
+---
+
+## Where output lands
+
+| Path | Written by | Tracked |
+|---|---|---|
+| `output/<timestamp>/` | `demo.py` | no |
+| `output/Eval_<dataset>/` | `evaluate.py` | no |
+| `runs/<tag>/` | `train.py` | no |
+| `data/Create_Data/projected/` | `Data.py make_light` | no |
+| `data/Create_Data/raw_<MMDD>/` | `Data.py capture` | no |
+| `data/Create_Data/warp_<MMDD>/` | `Data.py warp` | no |
+| `data/recordings/` | `Data.py record` | no |
+
+Inside a `demo.py` run folder:
+
+| File | When |
+|---|---|
+| `run_meta.json` | always |
+| `detections.csv` | always |
+| `captures/` · `frames_all/` | `--save-every` > 0 |
+| `calib/` | live and replay runs |
+| `result.mp4` | `--video`, live, or replay with one `--video-out` |
+| `result_<kind>.mp4` | replay with several `--video-out` |
+
+Each run gets its own timestamped folder, so repeated runs never overwrite each other.
+
+---
+
+## Settings that have no flag
+
+**No flag names a model.** These are read from
+`projector_distortion/configs/*.yaml`, because none of them is what changes between two
+runs:
+
+| Setting | Where |
+|---|---|
+| Restoration backend · checkpoint · input size | `model:` in `restoration.yaml` |
+| Architecture and ablations | `ablation:` in `restoration.yaml` |
+| Epochs, batch, lr, accumulation, loss weights | `train:` in `restoration.yaml` |
+| Detection backend · checkpoints · confidence | `detector:` / `weights:` in `detection.yaml` |
+| Class names, box size gate, inference size | `detection.yaml` |
+| Live rig: monitor, webcam, latency, calibration review | `rig:` in `live.yaml` |
+| Collection rig, session folders, warp geometry, codec | `collect.yaml` |
+
+The three that do have an override — `--screen`, `--camera` and (replay only)
+`--offset-ms` — are the ones someone gets wrong on the first run of a session, where an
+aborted run should not cost a file edit.
+
+```yaml
+# projector_distortion/configs/detection.yaml
+detector:
+  backend: ssd      # no ultralytics needed
+  # backend: none   # restoration only, for every run
+```
+
+```yaml
+# projector_distortion/configs/live.yaml
+rig:
+  screen: 1
+  camera: 0
+  offset: 6                  # projector -> camera latency, in frames
+  review_calibration: true   # false for an unattended run
+```
+
+---
+
+[한국어](COMMANDS.ko.md) · [← README](README.md)
