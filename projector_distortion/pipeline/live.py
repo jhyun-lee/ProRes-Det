@@ -28,7 +28,8 @@ import numpy as np
 from ..models import filter_detections
 from ..utils.display import Monitor, place_fullscreen
 from ..utils.image import resize
-from ..utils.visualize import draw_quad, grid_2x2
+from ..utils.visualize import draw_quad
+from .offline import build_panel
 
 WINDOW = "Projector_Display"
 PANEL = "Combined_View"
@@ -525,7 +526,7 @@ def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_eve
             det_distorted=det_c, det_restored=det_r,
             t_restore=t_restore, t_detect=t_detect,
         )
-        panel = build_panel(result, detector_name)
+        panel = build_panel(result, detector_name, residual_mean=True)
         result.t_worker = time.perf_counter() - started
         try:
             write_queue.put_nowait((result, panel))
@@ -542,16 +543,6 @@ def _worker(frame_queue, result_queue, write_queue, restorer, detector, stop_eve
             # timeout and blamed every straggler on a missed deadline. Report it.
             if lost is not None:
                 lost.append(result.frame_id)
-
-
-def build_panel(result, detector_name="detector") -> np.ndarray:
-    return grid_2x2(
-        result.light, result.distorted_det, result.restored_det, result.residual,
-        labels=["light (projected source)",
-                f"distorted + {detector_name} ({len(result.det_distorted)})",
-                f"restored + {detector_name} ({len(result.det_restored)})",
-                f"residual (mean {result.residual_mean:.3f})"],
-    )
 
 
 def run_live(video, restorer, detector, recorder, background=None, camera=0,

@@ -18,8 +18,12 @@ the projector window stops early, as do the end of the clip and --seconds.
 
 This stage stands outside the session folders the other four share: it produces one
 mp4, not the distorted/light/surface triplets a training set is made of, so there is
-nothing for `warp` or `train.py` to pick up. It is for proving a rig works and for
-grabbing raw footage before there are weights to run.
+nothing here for `warp` or `train.py` to pick up.
+
+What does read it is `demo.py --video-pair`, which pairs the recording back with the
+clip it was shot against and restores every frame - rectifying as it goes, since what
+is written here is raw. That is the whole path from a rig to a restored video without
+a second machine or a checkpoint present at capture time.
 
 The mp4 lands in record.out_dir next to a .json holding the clip, camera and monitor
 settings the run actually used, plus the measured capture rate. The codec, the fps
@@ -43,7 +47,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # for `common`
 
-from common import cfg, cfg_path, pick  # noqa: E402
+from common import cfg, cfg_path, pick, shrink  # noqa: E402
 
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 LIVE_DIR = os.path.join(DATA_DIR, "live")
@@ -69,15 +73,6 @@ MAX_QUEUED = 32
 CODEC = "mp4v"
 FPS_PROBE = 24
 PREVIEW_EVERY = 5
-
-
-def shrink(img, size):
-    """`size` is (width, height); None or a match keeps the image as it is."""
-    if size is None or (img.shape[1], img.shape[0]) == tuple(size):
-        return img
-    shrinking = size[0] * size[1] < img.shape[1] * img.shape[0]
-    return cv2.resize(img, tuple(size),
-                      interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_LINEAR)
 
 
 def hold_until(deadline):

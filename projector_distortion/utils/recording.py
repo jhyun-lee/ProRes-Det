@@ -9,7 +9,8 @@ RunRecorder - owns everything a run writes to disk.
       captures/          the footage itself, before any box is drawn on it
       frames_all/        the 2x2 comparison panels, kept apart so they can be
                          flipped through on their own
-      result.mp4         2x2 panel
+      result.mp4         the run's video; result_<kind>.mp4 when a run asks for
+                         more than one view of the same frames
 
 Keeping captures/ un-annotated is what lets evaluate.py score the same run later, or
 another detector re-run over the identical restoration.
@@ -45,8 +46,21 @@ KIND_DIRS = {"distorted": "captures", "restored": "captures", "panel": "frames_a
 JPEG_QUALITY = 92
 
 
+def _video_targets(video_size):
+    """
+    Normalise `video_size` into {name: (w, h)}. None/empty means no video at all.
+
+    A bare (w, h) is the single unnamed result.mp4; a dict names each one.
+    """
+    if not video_size:
+        return {}
+    if isinstance(video_size, dict):
+        return {k: v for k, v in video_size.items() if v}
+    return {None: video_size}
+
+
 class RunRecorder:
-    """Use as a context manager so csv handles and the video writer always close."""
+    """Use as a context manager so csv handles and the video writers always close."""
 
     def __init__(self, output_dir, save_every=1, frame_kinds=FRAME_KINDS,
                  video_size=None, video_fps=30):
@@ -73,16 +87,20 @@ class RunRecorder:
         self.bytes_written = 0
         self._t0 = time.time()
 
-        self.video_path = None
-        self.writer = None
-        if video_size:
-            self.video_path = os.path.join(self.dir, "result.mp4")
-            self.writer = cv2.VideoWriter(self.video_path,
-                                          cv2.VideoWriter_fourcc(*"mp4v"),
-                                          video_fps, tuple(video_size))
-            if not self.writer.isOpened():
-                print(f"warning: could not open the video writer at {self.video_path}")
-                self.writer = None
+        # The unnamed writer keeps the plain result.mp4, because that path is in
+        # every run's instructions and in the report line.
+        self.writers = {}
+        self.video_paths = {}
+        for name, size in _video_targets(video_size).items():
+            path = os.path.join(self.dir,
+                                "result.mp4" if name is None else f"result_{name}.mp4")
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
+                                     video_fps, tuple(size))
+            if not writer.isOpened():
+                print(f"warning: could not open the video writer at {path}")
+                continue
+            self.writers[name] = writer
+            self.video_paths[name] = path
 
         self._det_fh = open(os.path.join(self.dir, "detections.csv"), "w", newline="",
                             encoding="utf-8")
@@ -171,9 +189,11 @@ class RunRecorder:
             self.saved_frames += 1
         return n
 
-    def write_video(self, panel):
-        if self.writer is not None:
-            self.writer.write(panel)
+    def write_video(self, frame, name=None):
+        """One frame into the named video, or into result.mp4 when unnamed."""
+        writer = self.writers.get(name)
+        if writer is not None:
+            writer.write(frame)
 
     def _imwrite(self, path, img):
         if not cv2.imwrite(path, img, self.jpeg_params):
@@ -187,16 +207,24 @@ class RunRecorder:
         self.meta["elapsed_sec"] = round(time.time() - self._t0, 2)
         self.meta["saved_frames"] = self.saved_frames
         self.meta["image_mb"] = round(self.bytes_written / 1048576, 2)
-        if self.video_path and os.path.exists(self.video_path):
-            self.meta["video_mb"] = round(os.path.getsize(self.video_path) / 1048576, 2)
+        videos = {name: round(os.path.getsize(path) / 1048576, 2)
+                  for name, path in self.video_paths.items() if os.path.exists(path)}
+        if videos:
+            # video_mb stays the total across every video written, so the report line
+            # and anything reading an older run_meta keep meaning the same thing.
+            self.meta["video_mb"] = round(sum(videos.values()), 2)
+            if set(videos) != {None}:
+                self.meta["videos"] = {name: {"file": os.path.basename(
+                    self.video_paths[name]), "mb": mb}
+                    for name, mb in videos.items()}
         self.meta.update(summary)
         self._flush_meta()
         return self.meta
 
     def close(self):
-        if self.writer is not None:
-            self.writer.release()
-            self.writer = None
+        for writer in self.writers.values():
+            writer.release()
+        self.writers = {}
         fh = getattr(self, "_det_fh", None)
         if fh and not fh.closed:
             fh.close()

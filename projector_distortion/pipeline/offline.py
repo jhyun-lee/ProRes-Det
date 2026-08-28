@@ -57,12 +57,14 @@ class FrameResult:
         }
 
 
-def process_sample(sample: Sample, restorer, detector, frame_id=0,
-                   min_area=500, min_width=20, min_height=20,
-                   with_gt=True) -> FrameResult:
-    """Run one (distorted, light) pair end to end."""
-    distorted = read_bgr(sample.distorted)
-    light = read_bgr(sample.light)
+def process_pair(distorted, light, restorer, detector, frame_id=0, name_id=None,
+                 min_area=500, min_width=20, min_height=20) -> FrameResult:
+    """
+    Restore and detect one in-memory (distorted, light) pair.
+
+    The half of process_sample that never touches the disk, so the video replay
+    pipeline runs the identical restoration and box gate on decoded frames.
+    """
     size = tuple(restorer.input_size)
 
     t0 = time.perf_counter()
@@ -80,37 +82,58 @@ def process_sample(sample: Sample, restorer, detector, frame_id=0,
     det_c = filter_detections(raw_distorted, **gate)
     det_r = filter_detections(raw_restored, **gate)
 
-    distorted_det = draw_detections(distorted_plain.copy(), det_c)
-    restored_det = draw_detections(restored_plain.copy(), det_r)
-
-    surface_img, gt_boxes = None, []
-    if with_gt and sample.surface:
-        surface_img = resize(read_bgr(sample.surface), size)
-        # LabelMe labels name their classes, so they need the detector's own id order.
-        gt_boxes = load_labels(sample.label, size[0], size[1],
-                               class_names=getattr(detector, "class_names", None))
-
     return FrameResult(
-        frame_id=frame_id, name_id=sample.name_id,
+        frame_id=frame_id,
+        name_id=name_id if name_id is not None else f"frame_{frame_id:06d}",
         light=resize(light, size),
-        distorted=distorted_plain, distorted_det=distorted_det,
-        restored=restored_plain, restored_det=restored_det,
+        distorted=distorted_plain,
+        distorted_det=draw_detections(distorted_plain.copy(), det_c),
+        restored=restored_plain,
+        restored_det=draw_detections(restored_plain.copy(), det_r),
         residual=residual, residual_mean=residual_mean,
         det_distorted=det_c, det_restored=det_r,
         t_restore=t_restore, t_detect=t_detect,
-        surface=surface_img, gt_boxes=gt_boxes,
     )
 
 
-def build_panel(result: FrameResult, detector_name="detector") -> np.ndarray:
-    """2x2: light | distorted+det / restored+det | residual."""
+def process_sample(sample: Sample, restorer, detector, frame_id=0,
+                   min_area=500, min_width=20, min_height=20,
+                   with_gt=True) -> FrameResult:
+    """Run one (distorted, light) pair end to end, reading both off disk."""
+    result = process_pair(
+        read_bgr(sample.distorted), read_bgr(sample.light), restorer, detector,
+        frame_id=frame_id, name_id=sample.name_id,
+        min_area=min_area, min_width=min_width, min_height=min_height)
+
+    if with_gt and sample.surface:
+        size = tuple(restorer.input_size)
+        result.surface = resize(read_bgr(sample.surface), size)
+        # LabelMe labels name their classes, so they need the detector's own id order.
+        result.gt_boxes = load_labels(sample.label, size[0], size[1],
+                                      class_names=getattr(detector, "class_names", None))
+    return result
+
+
+def build_panel(result: FrameResult, detector_name="detector",
+                residual_mean=False) -> np.ndarray:
+    """
+    2x2: light | distorted+det / restored+det | residual.
+
+    Every mode's panel, so the three of them cannot drift into three slightly
+    different figures. `residual_mean` puts the frame's mean |residual| in the
+    caption, which live runs want because the number is the only quality signal
+    there is without ground truth, and a scrolling console cannot be read while
+    watching the rig.
+    """
+    residual_label = (f"residual (mean {result.residual_mean:.3f})" if residual_mean
+                      else "residual")
     return grid_2x2(
         result.light, result.distorted_det, result.restored_det, result.residual,
         labels=[
             "light (projected source)",
             f"distorted + {detector_name} ({len(result.det_distorted)})",
             f"restored + {detector_name} ({len(result.det_restored)})",
-            "residual",
+            residual_label,
         ],
     )
 
