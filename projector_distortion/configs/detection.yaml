@@ -11,7 +11,17 @@ detector:
   #     backend: [yolo, ssd]
   # Each entry loads its own weights entry below. demo.py detects with one model, so
   # it takes the first name in the list.
-  backend: yolo
+  #
+  # The default is `ssd` for a licensing reason, not a quality one. ssd is
+  # torchvision's SSDLite320-MobileNetV3-Large (BSD-3-Clause), so an out-of-the-box
+  # run touches nothing but MIT/BSD/Apache code. `yolo` is Ultralytics YOLO11, and
+  # both the package and the checkpoint here are AGPL-3.0 - selecting it is opting
+  # into that licence for whatever you build. See THIRD_PARTY.md.
+  #
+  # On the bundled data ssd is the weaker detector before restoration and the
+  # stronger demonstration of it: it gains +0.2877 mAP on sample_test against yolo's
+  # +0.2148. Both rows are in the README's reference table.
+  backend: ssd
   conf: 0.25
   imgsz: null             # YOLO inference size; null keeps the checkpoint's own
   # Box filter applied to both the captured and the restored pass.

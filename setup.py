@@ -26,11 +26,19 @@ def _requirements():
 
 setup(
     name="projector-distortion-framework",
-    version="0.1.0",
+    version="1.0.0",
     description="Remove projector light from camera captures, then compare object "
                 "detection before and after restoration.",
     long_description=_read("README.md"),
     long_description_content_type="text/markdown",
+    author="JeongHyun Lee",
+    author_email="ljhyun0821@gnu.ac.kr",
+    url="https://github.com/jhyun-lee/ProRes-Det",
+    project_urls={
+        "Documentation": "https://github.com/jhyun-lee/ProRes-Det#readme",
+        "Command reference": "https://github.com/jhyun-lee/ProRes-Det/blob/main/COMMANDS.md",
+        "Third-party licences": "https://github.com/jhyun-lee/ProRes-Det/blob/main/THIRD_PARTY.md",
+    },
     license="MIT",
     python_requires=">=3.9",
     packages=find_packages(include=["projector_distortion", "projector_distortion.*"]),
