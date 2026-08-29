@@ -448,8 +448,6 @@ rig. A round whose corners are unusable is captured raw only and reported as suc
 |---|---|---|
 | `--raw <dir>` | the newest `raw_<MMDD>` | Captures to rectify |
 | `--out <dir>` | `<session.dir>/warp_<MMDD>`, named after the raw | — |
-| `--mode boundary` | `warp.mode` (default) | 4 corners + the measured edge bow |
-| `--mode homography` | — | Corners only. For a flat screen with a clean boundary |
 | `--limit N` | `0` | Process at most N scenes |
 | `--review` | off | Show every scene and wait for a verdict |
 

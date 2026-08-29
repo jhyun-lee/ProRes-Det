@@ -1,9 +1,9 @@
-# Dataset collection defaults - everything data/*.py reads.
+# Dataset collection defaults - everything datasets/*.py reads.
 #
 # Only the settings that genuinely change between runs are still CLI flags
-# (--root, --screen, --camera, --rounds, --limit, --step, --augment, --settle-ms,
-# --seconds). Everything else is a property of the rig or of the naming convention,
-# gets set once, and lives here.
+# (--raw, --out, --src, --screen, --camera, --rounds, --limit, --seconds).
+# Everything else is a property of the rig or of the naming convention, gets set
+# once, and lives here.
 #
 # Relative paths resolve against the project root, so they work from any directory.
 
@@ -65,7 +65,7 @@ capture:
   seed: null              # null = unseeded, so two sessions accumulate variety
 
 warp:
-  mode: boundary          # boundary | homography | tps
+  mode: boundary          # boundary | homography
   work_size: [1280, 720]  # rectification resolution, before the final downscale
   final_size: [640, 360]  # saved resolution - the model input
   points: 20              # boundary correspondences sampled along each screen edge

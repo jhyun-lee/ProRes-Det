@@ -26,10 +26,8 @@ checkpoint and its confidence floor from configs/detection.yaml. Set
 
 The rig itself - which monitor the projector is on, which webcam watches it, and the
 projector->camera latency - is configs/live.yaml. --screen and --camera override the
-first two for one run, the same way they do on `Data.py capture`. The latency has a
-flag in replay mode alone (--offset-ms): live it is measured once per rig and never
-differs between two runs on it, but a recording carries its own rates and may have
-come off another rig entirely.
+first two for one run, the same way they do on `Data.py capture`; the latency does
+not, because it is measured once per rig and does not differ between two runs on it.
 
 Restore and detect only. Scoring the result against ground truth - detection mAP and
 restoration PSNR/SSIM - is evaluate.py's job.
@@ -92,9 +90,9 @@ def build_parser():
                           "result.mp4 and needs no hardware")
     rep.add_argument("--video-out", default=["panel"], nargs="+",
                      choices=VIDEO_OUT_KINDS, metavar="KIND",
-                     help="what result.mp4 holds: panel (2x2), restored (the restored "
-                          "frame alone), compare (distorted|restored side by side). "
-                          "Name several to write one video each, off the same pass: "
+                     help="what result.mp4 holds: panel (2x2) or restored (the "
+                          "restored frame alone). Name both to write one video each, "
+                          "off the same pass: "
                           "--video-out restored panel -> result_restored.mp4 + "
                           "result_panel.mp4 (default: panel)")
     rep.add_argument("--no-review", action="store_true",

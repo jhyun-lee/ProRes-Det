@@ -5,7 +5,6 @@ Project the light frames and shoot each one. Needs the rig: a projector and a we
 
     python Data.py capture --screen 2
     python Data.py capture --screen 2 --rounds 20 --limit 25
-    python Data.py capture --screen 2 --settle-ms 2000     # slower, safer pairing
 
 Reads <session.dir>/projected (make_light.py wrote it) and fills today's
 <session.dir>/raw_<MMDD>; --raw adds to a specific capture folder instead.

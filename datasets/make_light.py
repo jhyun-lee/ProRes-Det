@@ -4,9 +4,8 @@
 Video -> the `light` half of every training pair. No hardware, runs anywhere.
 
     python Data.py make_light                    # the three train_light_*.mp4 clips
-    python Data.py make_light --step 6           # denser sampling
-    python Data.py make_light --augment none     # no colour variants
     python Data.py make_light --src /path/clip.mp4 /path/folder
+    python Data.py make_light --limit 100        # only the first 100 source frames
 
 Writes into the one shared folder every capture day draws from:
 
@@ -101,7 +100,7 @@ def extract_frames(video, out_dir, tag, video_idx, step, limit, mode, rng, size,
                 saved += 1
             kept += 1
             # --limit counts source frames, so the augmentation multiplier stays a
-            # property of --augment and does not silently change what --limit means.
+            # property of light.augment and does not silently change --limit.
             if limit and kept >= limit:
                 break
         frame_idx += 1

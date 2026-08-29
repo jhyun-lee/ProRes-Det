@@ -5,8 +5,6 @@ Rectify raw captures into aligned surface/distorted pairs. No hardware, runs any
 
     python Data.py warp
     python Data.py warp --review              # check every scene, fix the bad ones
-    python Data.py warp --manual              # click the corners on every scene
-    python Data.py warp --mode homography
     python Data.py warp --raw data/Create_Data/raw_0813
 
 Boundary detection is a contour heuristic on a photograph: right most of the time,
@@ -497,7 +495,7 @@ def cmd_warp(args):
     presets = recorded_corners(args.raw)
     if presets:
         print(f"{len(presets)} scene(s) carry corners recorded at capture time; "
-              f"--redetect ignores them.")
+              f"--review can replace any of them with r.")
 
     done_surface = done_distorted = 0
     failed = []

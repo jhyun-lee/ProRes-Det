@@ -287,7 +287,6 @@ restoration, which needs many surfaces rather than many lights on one.
 ```bash
 python src/Data.py warp
 python src/Data.py warp --review
-python src/Data.py warp --mode homography
 python src/Data.py warp --raw datasets/Create_Data/raw_0813
 ```
 
