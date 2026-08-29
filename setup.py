@@ -37,7 +37,6 @@ setup(
     project_urls={
         "Documentation": "https://github.com/jhyun-lee/ProRes-Det#readme",
         "Command reference": "https://github.com/jhyun-lee/ProRes-Det/blob/main/COMMANDS.md",
-        "Third-party licences": "https://github.com/jhyun-lee/ProRes-Det/blob/main/THIRD_PARTY.md",
     },
     license="MIT",
     python_requires=">=3.9",

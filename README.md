@@ -196,8 +196,8 @@ python src/evaluate.py --input datasets/SampleData/sample_test                  
 The `yolo` rows need one edit, because the detector is configured and never flagged —
 set `detector.backend: [yolo, ssd]` in
 [configs/detection.yaml](src/projector_distortion/configs/detection.yaml) and each entry
-becomes a row of the same report. That also opts into AGPL-3.0; see
-[THIRD_PARTY.md](THIRD_PARTY.md).
+becomes a row of the same report. That also opts into AGPL-3.0 — see
+[License](#8-license).
 
 Numbers were produced on the checkpoints tracked in this repository at
 `detector.conf: 0.25` and `--iou 0.5`, the shipped defaults. Restoration is
@@ -210,7 +210,7 @@ a different GPU may move the last decimal.
 
 ```
 ProRes-Det/
-├── README.md  LICENSE.txt  THIRD_PARTY.md  COMMANDS.md  README_running.md
+├── README.md  LICENSE.txt  COMMANDS.md  README_running.md
 ├── setup.py  requirements.txt  requirements-cuda.txt
 │
 ├── src/                      all source lives here
@@ -341,8 +341,9 @@ shipped `detector.backend` is `ssd`, torchvision's BSD-licensed SSDLite, so an
 out-of-the-box run touches only MIT/BSD/Apache code. Selecting `yolo` opts into
 AGPL-3.0.
 
-Full accounting, upstream links and the architectures this work reimplements:
-[THIRD_PARTY.md](THIRD_PARTY.md).
+Upstream: [ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0) and
+[torchvision](https://github.com/pytorch/vision) (BSD-3-Clause). Every other
+dependency is MIT, BSD or Apache; `pip show <package>` lists them.
 
 ---
 

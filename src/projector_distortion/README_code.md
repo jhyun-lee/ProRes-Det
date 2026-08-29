@@ -86,6 +86,13 @@ depthwise-gated FFN, so it is not Restormer, whatever the pre-rename `restormer_
 tag on older checkpoints suggests. It is fully convolutional, which is why the 180×320
 training patch and the 640×360 inference size behave identically.
 
+The blocks are reimplemented from their papers rather than copied, so they carry a
+citation rather than a licence: NAFBlock's SimpleGate, LayerNorm placement and
+learnable residual scales come from Chen et al., *Simple Baselines for Image
+Restoration* (ECCV 2022, [megvii-research/NAFNet](https://github.com/megvii-research/NAFNet));
+the channel attention from Hu et al., *Squeeze-and-Excitation Networks* (CVPR 2018);
+the encoder/decoder skeleton from Ronneberger et al., *U-Net* (MICCAI 2015).
+
 `ssd` normalises its labels: torchvision heads emit the COCO id (1..N, 0 = background), so
 `detect()` subtracts 1. ultralytics is already 0-based.
 
