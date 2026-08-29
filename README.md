@@ -1,6 +1,6 @@
 # ProRes-Det
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22153822.svg)](https://doi.org/10.5281/zenodo.22153822)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22153821.svg)](https://doi.org/10.5281/zenodo.22153821)
 
 **Pro**jector **Res**toration + **Det**ection
 
@@ -348,8 +348,10 @@ Full accounting, upstream links and the architectures this work reimplements:
 
 ## 9. Citation
 
-If this software is useful in your research, please cite it. Zenodo mints a DOI per
-release; the one below resolves to this version.
+If this software is useful in your research, please cite it. Zenodo issues two DOIs:
+**10.5281/zenodo.22153821** always resolves to the newest release and is what the
+badge above points at, while the one in the entry below is pinned to v1.0.0. Cite the
+pinned one — a result is reproducible against a version, not against "latest".
 
 ```bibtex
 @software{lee_prores_det,
