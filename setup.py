@@ -26,7 +26,7 @@ def _requirements():
 
 setup(
     name="projector-distortion-framework",
-    version="1.0.0",
+    version="1.0.3",
     description="Remove projector light from camera captures, then compare object "
                 "detection before and after restoration.",
     long_description=_read("README.md"),
