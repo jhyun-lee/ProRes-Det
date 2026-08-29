@@ -3,8 +3,9 @@
 Everything about the dataset: what ships, how filenames tie the views together, the label
 format, and the tools that build more of it.
 
-Script options for `demo.py` / `evaluate.py` / `train.py` are in
-[README_running.md](../README_running.md).
+Every flag, for these stages and the three root scripts, is in
+[COMMANDS.md](../COMMANDS.md). This page is what the data *is* and how a session
+is shot.
 
 - [What ships](#what-ships)
 - [The three splits](#the-three-splits)
@@ -377,12 +378,6 @@ Lists the displays and opens the webcam, so `capture` is not the first attempt.
 
 ### `make_light` — video → light frames
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--src <path>...` | `light.src` — the three `train_light_*.mp4` | Any mix of video files and folders of them |
-| `--out <dir>` | `<session.dir>/projected` | — |
-| `--limit N` | `0` | At most N *source* frames per video, before augmentation |
-
 Written as `light_<tag>_<videoIdx>_<frameIdx>_<variant>.jpg`, where `variant` is `0`,
 `invert` or the hue angle. The folder is `projected/` but the files stay `light_*`:
 `projected_` is already the pre-rename prefix for *distorted* files, so a light frame
@@ -394,15 +389,6 @@ model's input size, so this only has to sit comfortably above it. Set `light.see
 the hue angles for a reproducible run.
 
 ### `capture` — projector + webcam → raw captures
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--raw <dir>` | `<session.dir>/raw_<MMDD>`, today's | Add to a specific capture folder instead |
-| `--screen N` | `capture.screen` (`1`) | Monitor the projector is attached to. `check` prints the table |
-| `--camera N` | `capture.camera` (`0`) | — |
-| `--rounds N` | `capture.rounds` (`10`) | Scene setups; each starts with a fresh surface shot |
-| `--limit N` | `capture.limit` (`50`) | Light frames drawn per round, at random from the whole pool. `0` uses every frame |
-| `--warp` | off | Also rectify as you shoot. `Data.py capture_warp` is this flag |
 
 **How a round works.** `capture` projects the background and waits for you to press `s`.
 That shot becomes `surface` — the scene with nothing projected on it, so place the objects
@@ -443,13 +429,6 @@ came out wrong can still be redone with `Data.py warp --review` without going ba
 rig. A round whose corners are unusable is captured raw only and reported as such.
 
 ### `warp` — rectify into aligned pairs
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--raw <dir>` | the newest `raw_<MMDD>` | Captures to rectify |
-| `--out <dir>` | `<session.dir>/warp_<MMDD>`, named after the raw | — |
-| `--limit N` | `0` | Process at most N scenes |
-| `--review` | off | Show every scene and wait for a verdict |
 
 Rectification runs at `warp.work_size` (1280×720) with `warp.points` (20) boundary
 correspondences and the boundary pulled `warp.inset` (2) px in off the bright projection
@@ -518,14 +497,6 @@ python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4 # anywhere: rest
 | Projected clip | `record.clip` — `datasets/live/test_light.mp4` | `--clip <path>` |
 | Background | `record.background` — `datasets/live/BaseBackGround.jpg` | `collect.yaml` |
 | Output | `record.out_dir/rec_<MMDDHHMMSS>.mp4` + a `.json` beside it | `--out <path>` |
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--screen N` | `record.screen` (`1`) | Monitor the projector is attached to. `0` = primary |
-| `--camera N` | `record.camera` (`0`) | — |
-| `--loop` | off | Restart the clip instead of stopping at its end |
-| `--seconds F` | `0` | Stop after N seconds. `0` = no limit |
-| `--warp` | off | Calibrate once and record the rectified screen |
 
 The mp4 is `record.codec` (`mp4v`) at the camera's own resolution, the rate is measured
 over `record.fps_probe` (24) frames, the preview refreshes every `record.preview_every`

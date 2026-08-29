@@ -99,65 +99,32 @@ python src/demo.py --limit 5          # first 5 pairs
 ```
 
 `--live` needs a webcam and a projector. Which monitor it projects on, which webcam
-watches, and the projector→camera latency come from
-[configs/live.yaml](src/projector_distortion/configs/live.yaml) — set once per machine, not
-per run. The monitor table prints at startup, so a wrong `rig.screen` costs one aborted
-run to correct:
-
-```
-2 monitor(s) detected:
-      screen 0 -> 2560x1440 at (0,0) (primary)  \\.\DISPLAY1
-      screen 1 -> 1920x1080 at (2560,0)         \\.\DISPLAY2
-```
-
-```yaml
-# projector_distortion/configs/live.yaml
-rig:
-  screen: 1
-  camera: 0
-  offset: 6      # projector → camera latency, in frames
-```
-
-`--screen` and `--camera` override the first two for a single run, which is what a
-wrong guess costs instead of an edit:
-
-```bash
-python src/demo.py --live --screen 2
-```
+watches, and the projector→camera latency are properties of the machine, so they live
+in [configs/live.yaml](src/projector_distortion/configs/live.yaml) rather than in
+flags; `--screen` and `--camera` override the first two for one run. The monitor table
+prints at startup, so a wrong guess costs one aborted run rather than a file edit.
 
 The rig and the models do not have to be on the same machine, or in the same week.
 `Data.py record` projects a clip and records the camera's view as one raw mp4 with no
 models loaded; `demo.py --video-pair` turns that file back into a run — rectifying it,
 pairing every camera frame with the clip frame that caused it, and writing the restored
-video:
+video. One argument is enough, because the `.json` written beside the mp4 already names
+the clip and the rate the camera actually managed:
 
 ```bash
-python src/Data.py record --screen 2 --seconds 30              # on the rig
-python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4    # anywhere, later
+python src/Data.py record --screen 2 --seconds 30               # on the rig
+python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4 # anywhere, later
 ```
-
-One argument is enough: the `.json` `record` writes beside the mp4 already names the
-clip that was projected and the rate the camera actually managed, so neither has to be
-supplied. `--video-out restored panel` writes both views from the one restoration pass.
-
-Every option, input and output: [README_running.md](README_running.md).
 
 ![The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the `(distorted, light)` pairs come from exactly this setup.](Image/BeamPro.jpg)
 
-Collecting your own data is `Data.py`, which dispatches to the scripts under
-`datasets/`:
-
-```bash
-python src/Data.py                          # list the stages
-python src/Data.py check                    # monitors + webcam, run this first
-python src/Data.py make_light               # video -> the light frames to project
-python src/Data.py capture_warp --screen 2  # project, shoot and rectify: 10 scenes × 50 = 500 pairs
-```
-
-`capture` and `warp` can also be run apart, which is what leaves the geometry redoable
-without the rig. Everything lands under `datasets/Create_Data/`, ready for `--input` and
-`--data-root`. Stages, flags and the session layout:
+Collecting your own data is `Data.py`, which dispatches to the stage scripts under
+`datasets/` — `check`, `make_light`, `capture`, `warp`, `record`. Everything lands
+under `datasets/Create_Data/`, ready for `--input` and `--data-root`:
 [datasets/README_data.md](datasets/README_data.md).
+
+Every flag and its default: [COMMANDS.md](COMMANDS.md). Why each entry point behaves
+the way it does: [README_running.md](README_running.md).
 
 ![Pipeline: step 1 collects a surface shot and a projected frame, then rectifies the ROI into a distorted image; step 2 feeds the projected and distorted images to the 3-level U-Net, which predicts a residual to subtract; step 3 runs the detector on the distorted and the restored image and compares the two.](Image/Pipeline.png)
 
@@ -334,45 +301,21 @@ from projector_distortion.models import BaseRestorer, register_restorer
 class MyRestorer(BaseRestorer):
     name = "myrest"
 
-    def __init__(self, weights, device="cpu", input_size=(640, 360), **_):
-        self.input_size = tuple(input_size)
-        self.net = load_my_model(weights)
-
     def restore(self, distorted_bgr, light_bgr):
-        restored = self.net(distorted_bgr)            # `light` is offered, not required
-        return restored, residual_or_zeros
+        return self.net(distorted_bgr), residual_or_zeros
 ```
 
-Point the config at it and it runs:
-
-```yaml
-# projector_distortion/configs/restoration.yaml
-model:
-  backend: myrest
-  weights: path/to.pt
-```
-
-Both the backend name and the checkpoint come from the config; there is no flag for
-either.
+`model.backend: myrest` in
+[configs/restoration.yaml](src/projector_distortion/configs/restoration.yaml) is the
+whole change. Both the backend and its checkpoint come from the config; there is no
+flag for either.
 
 `light` — the frame the projector emitted at that moment — is passed to every restorer
 because it is the one signal a ProCam rig has and an ordinary restoration setting does
 not. A single-image backend simply ignores it.
 
-The second return value is the residual view. A backend that predicts the surface image
-directly returns zeros there; only the residual panel tile and `residual_mean` lose their
-meaning, and everything else scores the same.
-
-The shipped network predicts the residual to subtract, not the surface image:
-
-```
-input   (B, 6, H, W) = cat([distorted, light])  in [-1, 1]
-output  (B, 3, H, W) = residual
-restored = (distorted - residual).clamp(-1, 1)
-```
-
-Why that convention matters, and how the loss enforces it:
-[weights/README_weights.md](weights/README_weights.md#the-residual-convention).
+Interfaces, the call graph and the public API:
+[README_code.md](src/projector_distortion/README_code.md).
 
 ---
 

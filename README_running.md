@@ -1,10 +1,12 @@
 # Running ProRes-Det
 
-Options, input and output for the three root entry points. For install and the
-one-liners that just work, see [README.md](README.md).
+Why each entry point behaves the way it does: what the configs own, how the rig is
+calibrated, what a run writes, and where the time goes.
 
-Dataset collection is `src/Data.py`, which dispatches to the scripts under
-`datasets/`; it is documented in [datasets/README_data.md](datasets/README_data.md).
+**Every flag and its default is in [COMMANDS.md](COMMANDS.md)** — this page explains
+the behaviour behind them rather than listing them again. Install and the one-liners
+that just work are in [README.md](README.md); dataset collection is in
+[datasets/README_data.md](datasets/README_data.md).
 
 - [What the config files own](#what-the-config-files-own)
 - [`demo.py` — restore → detect](#demopy--restore--detect)
@@ -61,14 +63,6 @@ that is `evaluate.py`'s job.
 | Input | `datasets/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
 | Output | `output/<timestamp>/` | `--output <dir>` |
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--limit N` | `0` | Cap how many pairs are processed. `0` = all |
-| `--save-every N` | `1` | Image save interval. `0` keeps the csv only |
-| `--video` | off | Also write the 2×2 panels as `result.mp4` |
-| `--no-detect` | off | Restoration only, without editing `detection.yaml` |
-| `--device cuda\|cpu` | cuda if present | — |
-
 Images are written at JPEG quality 92. Box size gating comes from
 `detector.min_width` / `min_height` / `min_area` in `configs/detection.yaml`; every box
 that clears it is kept, because metric code must not lose duplicates.
@@ -106,11 +100,6 @@ python src/demo.py --video-pair datasets/recordings/rec_0828142253.mp4 --no-dete
 | Projected clip | whatever the recording's `.json` says was projected | `--clip <mp4>` |
 | Output | `output/<timestamp>/result.mp4` + `calib/` | `--output <dir>` |
 | Views written | one — the 2×2 panel | `--video-out <kind>...` |
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--video-out <kind>...` | `panel` | `panel` (2×2), `restored` (the restored frame alone). Both are allowed |
-| `--no-review` | off | Skip the calibration verdict window, for an unattended run |
 
 **One pass, as many views as you name.** `--video-out restored panel` writes
 `result_restored.mp4` and `result_panel.mp4` from the same restoration — the frames are
@@ -198,19 +187,13 @@ camera actually opened at.
 `light:`, `capture:`, `warp:` and `record:`. Two files rather than one because the
 collection scripts run without torch and never import the pipeline package.
 
-### Flags
+### What it reads and writes
 
 | | Default | Change it with |
 |---|---|---|
 | Projected clip | `datasets/live/test_light.mp4` — the held-out source | `--clip <path>` |
 | Calibration background | `datasets/live/BaseBackGround.jpg` | fixed (`DEFAULT_LIVE_BG` in `projector_distortion/cli.py`) |
 | Output | `output/<timestamp>/` + `calib/` + `result.mp4` | `--output <dir>` |
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--screen N` | `rig.screen` (`1`) | Monitor the projector is on, `0` = primary. `python src/Data.py check` prints the table |
-| `--camera N` | `rig.camera` (`0`) | Webcam index |
-| `--debug-view` | off | Live window with the pre-warp camera feed and the quad |
 
 The run goes to the end of the clip, and the analysis stride is always measured rather
 than named — see below.
@@ -360,11 +343,6 @@ python src/evaluate.py --input datasets/SampleData/sample_test --gt datasets/Sam
 
 Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--iou <float>` | `0.5` | IoU threshold for a true positive |
-| `--limit N` | `0` | Cap how many pairs are scored |
-
 `evaluate.py` has no model flags at all — not even `--device`. Which backends it scores
 comes from `detector.backend` in `configs/detection.yaml`, and a list there is what puts
 one row per backend in the same report:
@@ -462,17 +440,6 @@ prints how many went each way.
 data: 994 triplets of 1,000 distorted image(s) from distorted=datasets/SampleData/sample_train/distorted
       skipped 6 without a light, 0 without a surface
 ```
-
-### Options
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--epochs N` | `30` | From `train.epochs` in `configs/restoration.yaml` |
-| `--batch-size N` | `4` | From `train.batch_size` |
-| `--lr F` | `0.0002` | From `train.lr` |
-| `--sample N` | `0` | Cap how many triplets are used |
-| `--resume <ckpt>` | — | Continue from a checkpoint. Its architecture wins over `ablation:` |
-| `--device cuda\|cpu` | cuda if present | — |
 
 Fixed rather than flagged: the gradient accumulation window is `train.accum_steps` in
 the YAML, the seed is `42` (`SEED` in `train.py`), DataLoader workers are `4`, or `8` for
