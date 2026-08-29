@@ -17,7 +17,7 @@ session:
   # projected/ is deliberately not dated: extracting the clips again per day would
   # cost disk and buy nothing, since the frames are identical. The captures are,
   # because a rig gets moved and a scene gets rebuilt between days.
-  dir: data/Create_Data
+  dir: datasets/Create_Data
   projected: projected
   raw_prefix: raw_
   warp_prefix: warp_
@@ -27,12 +27,12 @@ session:
 
 light:
   # The clips whose frames become the `light` half of a training pair.
-  # data/live/test_light.mp4 is the held-out projection source and is deliberately
+  # datasets/live/test_light.mp4 is the held-out projection source and is deliberately
   # absent: a set collected from these shares no projected frame with the test split.
   src:
-    - data/live/train_light_1.mp4
-    - data/live/train_light_2.mp4
-    - data/live/train_light_3.mp4
+    - datasets/live/train_light_1.mp4
+    - datasets/live/train_light_2.mp4
+    - datasets/live/train_light_3.mp4
   step: 30                # keep every Nth frame; 30 = one per second at 30fps
   augment: full           # full (6x) | invert (2x) | none (1x)
   # Saved resolution of a light frame. Downscaled again at the warp stage, so this
@@ -48,7 +48,7 @@ capture:
   screen: 1               # monitor the projector is on; 0 = primary
   camera: 0
   cam_backend: auto       # auto | any | dshow | msmf | v4l2
-  background: data/live/BaseBackGround.jpg
+  background: datasets/live/BaseBackGround.jpg
   rounds: 10              # scene setups; each starts with a fresh surface shot
   limit: 50               # light frames drawn per round, at random. 0 = all of them
   # Milliseconds a light frame is held on screen before its capture is kept.
@@ -73,12 +73,12 @@ warp:
   debug: true             # write the before/after overlays to <root>/debug
 
 record:
-  clip: data/live/test_light.mp4
-  out_dir: data/recordings
+  clip: datasets/live/test_light.mp4
+  out_dir: datasets/recordings
   screen: 1
   camera: 0
   cam_backend: auto
-  background: data/live/BaseBackGround.jpg
+  background: datasets/live/BaseBackGround.jpg
   codec: mp4v             # fourcc; mp4v is the one OpenCV reliably has built in
   fps_probe: 24           # frames measured before the header fps is fixed
   preview_every: 5

@@ -18,8 +18,8 @@ the difference — mAP, PSNR, SSIM.
 |---|---|
 | [COMMANDS.md](COMMANDS.md) | Every command and flag in one lookup table, plus the interactive keys |
 | [README_running.md](README_running.md) | `demo.py` · `evaluate.py` · `train.py` — every option, input, output |
-| [projector_distortion/README_code.md](projector_distortion/README_code.md) | What each module owns, the call graph, the public API |
-| [data/README_data.md](data/README_data.md) | The three splits, layout, filename rules, both label formats, every `Data.py` stage |
+| [projector_distortion/README_code.md](src/projector_distortion/README_code.md) | What each module owns, the call graph, the public API |
+| [datasets/README_data.md](datasets/README_data.md) | The three splits, layout, filename rules, both label formats, every `Data.py` stage |
 | [weights/README_weights.md](weights/README_weights.md) | The three checkpoints, checkpoint format, the residual convention |
 
 ---
@@ -57,20 +57,20 @@ fell back to the CPU says so.
 ## 2. Run
 
 ```bash
-python demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
-python evaluate.py                # before/after mAP + PSNR/SSIM     → output/Eval_<dataset>/
-python train.py --epochs 30       # retrain the restorer             → runs/<tag>/
-python demo.py --live             # webcam + projector rig           → output/<timestamp>/
-python Data.py capture_warp       # collect your own data (see below) → data/Create_Data/warp_<MMDD>/
-python Data.py record --screen 2  # project + record, no models      → data/recordings/
-python demo.py --video-pair data/recordings/rec_<t>.mp4   # replay that recording → result.mp4
+python src/demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
+python src/evaluate.py                # before/after mAP + PSNR/SSIM     → output/Eval_<dataset>/
+python src/train.py --epochs 30       # retrain the restorer             → runs/<tag>/
+python src/demo.py --live             # webcam + projector rig           → output/<timestamp>/
+python src/Data.py capture_warp       # collect your own data (see below) → datasets/Create_Data/warp_<MMDD>/
+python src/Data.py record --screen 2  # project + record, no models      → datasets/recordings/
+python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4   # replay that recording → result.mp4
 ```
 
 The first three need no arguments. Sample data and all three checkpoints are tracked in
 git, so a clone runs as-is. An editable install also puts `pdf-demo`, `pdf-evaluate` and
 `pdf-train` on the PATH; they are thin wrappers around the same three scripts.
 
-The bundled dataset is split three ways under `data/SampleData/`, and each entry point
+The bundled dataset is split three ways under `datasets/SampleData/`, and each entry point
 defaults to its own split:
 
 | Split | Contents | Default for |
@@ -80,13 +80,13 @@ defaults to its own split:
 | `sample_test` | 200 pairs, 5 scenes, 53 boxes | held out — pass `--input`/`--gt` to reach it |
 
 The scenes do not overlap, so a model trained on `sample_train` is scored on frames it has
-never seen. Details and the two label formats: [data/README_data.md](data/README_data.md).
+never seen. Details and the two label formats: [datasets/README_data.md](datasets/README_data.md).
 
 **Run from the repo root.** Config paths resolve against the project root, but the
 `train.data` globs are read against the working directory.
 
 Swapping a model leaves every path unchanged — it is a one-line edit in
-[configs/detection.yaml](projector_distortion/configs/detection.yaml), not a flag:
+[configs/detection.yaml](src/projector_distortion/configs/detection.yaml), not a flag:
 
 ```yaml
 detector:
@@ -95,12 +95,12 @@ detector:
 ```
 
 ```bash
-python demo.py --limit 5          # first 5 pairs
+python src/demo.py --limit 5          # first 5 pairs
 ```
 
 `--live` needs a webcam and a projector. Which monitor it projects on, which webcam
 watches, and the projector→camera latency come from
-[configs/live.yaml](projector_distortion/configs/live.yaml) — set once per machine, not
+[configs/live.yaml](src/projector_distortion/configs/live.yaml) — set once per machine, not
 per run. The monitor table prints at startup, so a wrong `rig.screen` costs one aborted
 run to correct:
 
@@ -122,7 +122,7 @@ rig:
 wrong guess costs instead of an edit:
 
 ```bash
-python demo.py --live --screen 2
+python src/demo.py --live --screen 2
 ```
 
 The rig and the models do not have to be on the same machine, or in the same week.
@@ -132,8 +132,8 @@ pairing every camera frame with the clip frame that caused it, and writing the r
 video:
 
 ```bash
-python Data.py record --screen 2 --seconds 30              # on the rig
-python demo.py --video-pair data/recordings/rec_<t>.mp4    # anywhere, later
+python src/Data.py record --screen 2 --seconds 30              # on the rig
+python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4    # anywhere, later
 ```
 
 One argument is enough: the `.json` `record` writes beside the mp4 already names the
@@ -144,19 +144,20 @@ Every option, input and output: [README_running.md](README_running.md).
 
 ![The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the `(distorted, light)` pairs come from exactly this setup.](Image/BeamPro.jpg)
 
-Collecting your own data is `Data.py`, which dispatches to the scripts under `data/`:
+Collecting your own data is `Data.py`, which dispatches to the scripts under
+`datasets/`:
 
 ```bash
-python Data.py                          # list the stages
-python Data.py check                    # monitors + webcam, run this first
-python Data.py make_light               # video -> the light frames to project
-python Data.py capture_warp --screen 2  # project, shoot and rectify: 10 scenes × 50 = 500 pairs
+python src/Data.py                          # list the stages
+python src/Data.py check                    # monitors + webcam, run this first
+python src/Data.py make_light               # video -> the light frames to project
+python src/Data.py capture_warp --screen 2  # project, shoot and rectify: 10 scenes × 50 = 500 pairs
 ```
 
 `capture` and `warp` can also be run apart, which is what leaves the geometry redoable
-without the rig. Everything lands under `data/Create_Data/`, ready for `--input` and
+without the rig. Everything lands under `datasets/Create_Data/`, ready for `--input` and
 `--data-root`. Stages, flags and the session layout:
-[data/README_data.md](data/README_data.md).
+[datasets/README_data.md](datasets/README_data.md).
 
 ![Pipeline: step 1 collects a surface shot and a projected frame, then rectifies the ROI into a distorted image; step 2 feeds the projected and distorted images to the 3-level U-Net, which predicts a residual to subtract; step 3 runs the detector on the distorted and the restored image and compares the two.](Image/Pipeline.png)
 
@@ -218,14 +219,14 @@ not the same axis, which is the reason this project scores both.
 ### Reproducing
 
 ```bash
-python evaluate.py                                       # sample_eval, ssd
-python evaluate.py --input data/SampleData/sample_test                    --gt    data/SampleData/sample_test   # sample_test, ssd
+python src/evaluate.py                                       # sample_eval, ssd
+python src/evaluate.py --input datasets/SampleData/sample_test                    --gt    datasets/SampleData/sample_test   # sample_test, ssd
 ```
 
 `ssd` is the default detector, so those two commands reproduce the `ssd` rows exactly.
 The `yolo` rows need one edit, because the detector is configured and never flagged —
 set `detector.backend: [yolo, ssd]` in
-[configs/detection.yaml](projector_distortion/configs/detection.yaml) and each entry
+[configs/detection.yaml](src/projector_distortion/configs/detection.yaml) and each entry
 becomes a row of the same report. That also opts into AGPL-3.0; see
 [THIRD_PARTY.md](THIRD_PARTY.md).
 
@@ -240,28 +241,30 @@ a different GPU may move the last decimal.
 
 ```
 ProRes-Det/
-├── demo.py                   restore → detect, end to end (offline / --live / --video-pair)
-├── evaluate.py               detection before/after + restoration quality
-├── train.py                  fine-tune the restoration model
-├── Data.py                   dataset collection: one entry point for every data/ stage
-├── setup.py  requirements.txt  requirements-cuda.txt  LICENSE
+├── README.md  LICENSE.txt  THIRD_PARTY.md  COMMANDS.md  README_running.md
+├── setup.py  requirements.txt  requirements-cuda.txt
 │
-├── projector_distortion/     the library → README_code.md
-│   ├── configs/              default settings (YAML)
-│   ├── models/               restoration + detection models
-│   ├── pipeline/             offline / live / replay run loops
-│   └── utils/                image, visualization, recording and display helpers
+├── src/                      all source lives here
+│   ├── demo.py               restore → detect, end to end (offline / --live / --video-pair)
+│   ├── evaluate.py           detection before/after + restoration quality
+│   ├── train.py              fine-tune the restoration model
+│   ├── Data.py               dataset collection: one entry point for every stage
+│   ├── projector_distortion/ the library → README_code.md
+│   │   ├── configs/          default settings (YAML)
+│   │   ├── models/           restoration + detection models
+│   │   ├── pipeline/         offline / live / replay run loops
+│   │   └── utils/            image, visualization, recording and display helpers
+│   └── tests/                pytest suite, 151 tests
 │
-├── tests/                    pytest suite, 151 tests
-├── weights/                  3 checkpoints, 51 MiB, tracked in git
-├── data/                     SampleData/ (train · eval · test), live/ clips, and the
+├── datasets/                 SampleData/ (train · eval · test), live/ clips, and the
 │                             collection scripts Data.py drives; 349 MiB tracked
+├── weights/                  3 checkpoints, 51 MiB, tracked in git
 ├── Image/                    the figures above
 └── output/                   run artefacts (git-ignored)
 ```
 
 What each module owns and how they call each other:
-[projector_distortion/README_code.md](projector_distortion/README_code.md).
+[projector_distortion/README_code.md](src/projector_distortion/README_code.md).
 
 ---
 
@@ -273,10 +276,10 @@ configs/*.yaml  <  CLI flags
 
 | File | Holds |
 |---|---|
-| [configs/restoration.yaml](projector_distortion/configs/restoration.yaml) | Restoration backend and weights, input size, structural toggles, training hyperparameters, loss weights, training data paths |
-| [configs/detection.yaml](projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names — which is also what LabelMe class *names* are matched against |
-| [configs/live.yaml](projector_distortion/configs/live.yaml) | The `--live` rig: monitor, webcam, camera backend, projector→camera latency, whether to review the calibration |
-| [configs/collect.yaml](projector_distortion/configs/collect.yaml) | Everything `Data.py` reads: session folders, light extraction, the capture rig, warp geometry, recording |
+| [configs/restoration.yaml](src/projector_distortion/configs/restoration.yaml) | Restoration backend and weights, input size, structural toggles, training hyperparameters, loss weights, training data paths |
+| [configs/detection.yaml](src/projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names — which is also what LabelMe class *names* are matched against |
+| [configs/live.yaml](src/projector_distortion/configs/live.yaml) | The `--live` rig: monitor, webcam, camera backend, projector→camera latency, whether to review the calibration |
+| [configs/collect.yaml](src/projector_distortion/configs/collect.yaml) | Everything `Data.py` reads: session folders, light extraction, the capture rig, warp geometry, recording |
 
 These files are where a model setting is changed; none of them has a CLI flag. The
 flags that remain are about *this* run — which data, where the output goes, how much
@@ -317,7 +320,7 @@ class MyDetector(BaseDetector):
 ```
 
 That is the whole change. `detector.backend: mydet` in
-[configs/detection.yaml](projector_distortion/configs/detection.yaml) works
+[configs/detection.yaml](src/projector_distortion/configs/detection.yaml) works
 immediately, and the pipeline, recording and evaluation code stay exactly as they were.
 
 ### Add a restorer
@@ -384,7 +387,7 @@ python -m pytest -q
 ## 8. License
 
 MIT for this project's own source, data and restoration weights — see
-[LICENSE](LICENSE).
+[LICENSE](LICENSE.txt).
 
 The repository also redistributes third-party artefacts under their own licences. One
 of them, `weights/detector_yolo11s.pt`, is **AGPL-3.0**, because it is a fine-tune of

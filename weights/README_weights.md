@@ -23,7 +23,7 @@ To use your own, point the configs below at them rather than overwriting these.
 
 All three are fine-tuned on the same 17-class projector-distortion dataset — 11 fruits and
 6 animals. The class list lives in
-[configs/detection.yaml](../projector_distortion/configs/detection.yaml). The YOLO
+[configs/detection.yaml](../src/projector_distortion/configs/detection.yaml). The YOLO
 checkpoint carries the same 17 names internally, and those win over the config's list.
 torchvision has no names, so `ssd` always uses the config's list.
 
@@ -96,9 +96,9 @@ variant never needs its config restated at inference time.
 
 ```bash
 # ablation: { use_ca: false } in projector_distortion/configs/restoration.yaml
-python train.py --epochs 30
+python src/train.py --epochs 30
 # then point model.weights at runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
-python demo.py
+python src/demo.py
 #   the ablation block does not have to stay set: the config travels in the checkpoint
 ```
 
@@ -175,8 +175,8 @@ still lowers L1, but not the high-frequency term. That is what makes the residua
 the actual boundaries of the projected light.
 
 The weights live under `train.loss` in
-[configs/restoration.yaml](../projector_distortion/configs/restoration.yaml) and come from
-an Optuna sweep on this dataset. Implementation: [train.py](../train.py).
+[configs/restoration.yaml](../src/projector_distortion/configs/restoration.yaml) and come from
+an Optuna sweep on this dataset. Implementation: [train.py](../src/train.py).
 
 > A custom restorer that emits surface directly still satisfies the `BaseRestorer` interface.
 > In that case the `residual` visualisation and the `residual_mean` metric lose their

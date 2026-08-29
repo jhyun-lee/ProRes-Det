@@ -15,7 +15,7 @@ from .config import PROJECT_ROOT, load_config, pick, resolve_path
 # data/README_data.md). demo.py and evaluate.py default to the validation split,
 # because it is the only one that ships both surface/ and labels/ for every scene;
 # train.py defaults to SAMPLE_TRAIN and never touches these two.
-SAMPLE_ROOT = "data/SampleData"
+SAMPLE_ROOT = "datasets/SampleData"
 SAMPLE_TRAIN = f"{SAMPLE_ROOT}/sample_train"
 SAMPLE_EVAL = f"{SAMPLE_ROOT}/sample_eval"
 SAMPLE_TEST = f"{SAMPLE_ROOT}/sample_test"
@@ -25,8 +25,8 @@ DEFAULT_GT = SAMPLE_EVAL
 # The held-out projection source. data/live/train_light_{1,2,3}.mp4 are what
 # collect.py turns into training light frames; --live defaults away from them so a
 # demo never projects what the shipped checkpoint was fitted on.
-DEFAULT_LIVE_VIDEO = "data/live/test_light.mp4"
-DEFAULT_LIVE_BG = "data/live/BaseBackGround.jpg"
+DEFAULT_LIVE_VIDEO = "datasets/live/test_light.mp4"
+DEFAULT_LIVE_BG = "datasets/live/BaseBackGround.jpg"
 DEFAULT_OUTPUT = "output"
 
 
@@ -198,15 +198,16 @@ def run_dir(base, name=None):
 
 
 def _delegate(module_name):
-    """Import a root-level script's main(). Only works from a source checkout."""
+    """Import an entry script's main(). Only works from a source checkout."""
     import importlib
-    if PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, PROJECT_ROOT)
+    src_dir = os.path.join(PROJECT_ROOT, "src")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
     try:
         return importlib.import_module(module_name).main
     except ImportError as e:
         raise SystemExit(
-            f"could not import {module_name}.py from {PROJECT_ROOT}.\n"
+            f"could not import {module_name}.py from {src_dir}.\n"
             f"    The pdf-* console scripts require an editable install of a "
             f"checkout: pip install -e .\n"
             f"    From a plain wheel, use the projector_distortion package directly."

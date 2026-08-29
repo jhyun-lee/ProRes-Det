@@ -27,7 +27,7 @@ import cv2
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+    sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 # config.py imports nothing heavier than PyYAML, so make_light.py and warp.py stay
 # runnable on a machine with no torch.
@@ -108,7 +108,7 @@ def data_dir():
     # normpath: the YAML writes forward slashes, and these paths get printed and
     # pasted back as arguments often enough that mixed separators are worth avoiding.
     return os.path.normpath(resolve_path(cfg("session", "dir",
-                                             default="data/Create_Data")))
+                                             default="datasets/Create_Data")))
 
 
 def projected_dir(create=False):

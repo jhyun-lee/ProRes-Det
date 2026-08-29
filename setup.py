@@ -41,7 +41,9 @@ setup(
     },
     license="MIT",
     python_requires=">=3.9",
-    packages=find_packages(include=["projector_distortion", "projector_distortion.*"]),
+    package_dir={"": "src"},
+    packages=find_packages(
+        where="src", include=["projector_distortion", "projector_distortion.*"]),
     package_data={"projector_distortion": ["configs/*.yaml"]},
     install_requires=_requirements(),
     extras_require={

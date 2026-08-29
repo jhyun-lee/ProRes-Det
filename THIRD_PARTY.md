@@ -1,6 +1,6 @@
 # Third-party components
 
-ProRes-Det's own source is MIT ([LICENSE](LICENSE)). It also *ships* and *depends on*
+ProRes-Det's own source is MIT ([LICENSE](LICENSE.txt)). It also *ships* and *depends on*
 work by others, not all of it under MIT, and this file is the accounting of that.
 
 Two different obligations are separated below, because they are not the same thing:
@@ -21,7 +21,7 @@ last: those carry an academic citation obligation, not a licence one.
 | `weights/detector_yolo11s.pt` | [Ultralytics YOLO11](https://github.com/ultralytics/ultralytics) — fine-tuned from `yolo11s.pt` | **AGPL-3.0** |
 | `weights/detector_ssdlite.pth` | [torchvision](https://github.com/pytorch/vision) `ssdlite320_mobilenet_v3_large` | BSD-3-Clause |
 | `weights/restorer_nafse_unet.pt` | Trained from scratch in this project | MIT |
-| `data/SampleData/**`, `data/live/**` | Collected for this project | MIT |
+| `datasets/SampleData/**`, `datasets/live/**` | Collected for this project | MIT |
 
 ### The AGPL-3.0 file, specifically
 
@@ -35,9 +35,9 @@ claimed over it.
 What that means in practice:
 
 - The default configuration does **not** use it. `detector.backend` is `ssd`, so
-  `python demo.py` and `python evaluate.py` out of the box run torchvision's
+  `python src/demo.py` and `python src/evaluate.py` out of the box run torchvision's
   BSD-licensed detector and never load this file.
-- Selecting `yolo` — in [configs/detection.yaml](projector_distortion/configs/detection.yaml)
+- Selecting `yolo` — in [configs/detection.yaml](src/projector_distortion/configs/detection.yaml)
   or by installing the `[yolo]` extra — opts into AGPL-3.0 for whatever you build on
   top. If that is a problem for your use, stay on `ssd` or supply your own weights.
 - Ultralytics sells an Enterprise licence for use outside AGPL terms. That is between
@@ -74,7 +74,7 @@ that the default configuration never reaches.
 torchvision downloads on first use. Those weights are trained on ImageNet and carry
 ImageNet's own terms of use; they are not redistributed here. Training without that
 term is a matter of setting `loss.perceptual: 0` in
-[configs/restoration.yaml](projector_distortion/configs/restoration.yaml).
+[configs/restoration.yaml](src/projector_distortion/configs/restoration.yaml).
 
 ---
 

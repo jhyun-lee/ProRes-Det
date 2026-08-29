@@ -44,12 +44,12 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # for `common`
 
 from common import cfg, cfg_path, pick, shrink  # noqa: E402
 
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+DATA_DIR = os.path.join(PROJECT_ROOT, "datasets")
 LIVE_DIR = os.path.join(DATA_DIR, "live")
 DEFAULT_CLIP = os.path.join(LIVE_DIR, "test_light.mp4")
 DEFAULT_BACKGROUND = os.path.join(LIVE_DIR, "BaseBackGround.jpg")

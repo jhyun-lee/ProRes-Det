@@ -466,8 +466,8 @@ def test_distorted_without_a_surface_is_skipped_not_fatal(bgr_image):
 
 def test_eval_dir_is_named_after_the_input_dataset():
     import evaluate
-    assert evaluate._eval_dir_name("data/SampleData/sample_eval") == "Eval_sample_eval"
-    assert evaluate._eval_dir_name("data/live_20260803_161234/") == \
+    assert evaluate._eval_dir_name("datasets/SampleData/sample_eval") == "Eval_sample_eval"
+    assert evaluate._eval_dir_name("datasets/live_20260803_161234/") == \
         "Eval_live_20260803_161234"
 
 

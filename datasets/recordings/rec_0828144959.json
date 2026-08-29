@@ -1,0 +1,59 @@
+{
+  "started_at": "2026-08-28T14:50:02",
+  "elapsed_sec": 120.52,
+  "stop_reason": "reached --seconds 120.0",
+  "video": {
+    "path": "C:\\Users\\ljhyu\\OneDrive\\Desktop\\2025_project\\Restore_PipeLine\\ProRes-Det\\data/recordings\\rec_0828144959.mp4",
+    "codec": "mp4v",
+    "fps_header": 9.979,
+    "size": [
+      1280,
+      720
+    ],
+    "frames": 1201,
+    "capture_span_sec": 120.0,
+    "measured_fps": 10.01,
+    "file_mb": 49.51,
+    "error": null
+  },
+  "clip": {
+    "path": "C:\\Users\\ljhyu\\OneDrive\\Desktop\\2025_project\\Restore_PipeLine\\ProRes-Det\\data/live/test_light.mp4",
+    "frames": 5858,
+    "fps": 30.0,
+    "size": [
+      854,
+      480
+    ],
+    "loops": 0
+  },
+  "projector": {
+    "screen_index": 2,
+    "frames_projected": 3601,
+    "fps_projector": 29.88,
+    "monitor": {
+      "x": 2560,
+      "y": 0,
+      "width": 1024,
+      "height": 768,
+      "primary": false,
+      "name": "\\\\.\\DISPLAY2"
+    }
+  },
+  "camera": {
+    "index": 0,
+    "backend": "auto",
+    "requested": [
+      1280,
+      960,
+      30
+    ],
+    "frames_read": 1201,
+    "frames_dropped": 0
+  },
+  "warp": {
+    "enabled": false,
+    "points_tl_tr_br_bl": null,
+    "target": null,
+    "homography": null
+  }
+}

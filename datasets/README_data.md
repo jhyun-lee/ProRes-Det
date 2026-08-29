@@ -102,15 +102,15 @@ The scenes do not overlap. No `surfaceId` in `sample_train` appears in `sample_e
 
 | Split | Pairs | Scenes | Labels | Read by |
 |---|---|---|---|---|
-| `sample_train` | 1,000 (994 pair a light) | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../projector_distortion/configs/restoration.yaml) |
+| `sample_train` | 1,000 (994 pair a light) | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../src/projector_distortion/configs/restoration.yaml) |
 | `sample_eval` | 22 | 10 | YOLO txt, 107 boxes | `demo.py` and `evaluate.py` — the default for both |
 | `sample_test` | 200 | 5 | LabelMe json, 53 boxes | nothing by default; pass `--input`/`--gt` |
 
 ```bash
-python train.py                                          # sample_train
-python evaluate.py                                       # sample_eval
-python evaluate.py --input data/SampleData/sample_test \
-                   --gt    data/SampleData/sample_test   # sample_test
+python src/train.py                                          # sample_train
+python src/evaluate.py                                       # sample_eval
+python src/evaluate.py --input datasets/SampleData/sample_test \
+                   --gt    datasets/SampleData/sample_test   # sample_test
 ```
 
 Two notes on the counts. Six `sample_train` captures reference a light frame the split does
@@ -172,8 +172,8 @@ Auto-detected, by which folder exists.
 | `research` | `ProjectorImage/` `BeamImage/` `OriginalImage/` |
 
 ```bash
-python demo.py --input data/SampleData/sample_eval                # flat
-python demo.py --input /path/to/WarpData_0520                     # research
+python src/demo.py --input datasets/SampleData/sample_eval                # flat
+python src/demo.py --input /path/to/WarpData_0520                     # research
 ```
 
 Images sitting loose in one folder are handled as `mixed`, split by the `distorted_` and
@@ -197,7 +197,7 @@ One line per box, `<cls_id> <cx> <cy> <w> <h>`, all normalised to 0–1.
 ```
 
 `cls_id` runs `0..16` and follows the `names` order in
-[configs/detection.yaml](../projector_distortion/configs/detection.yaml) — 11 fruits
+[configs/detection.yaml](../src/projector_distortion/configs/detection.yaml) — 11 fruits
 (Apple … Watermelon), then 6 animals (Cat … Snake). All 17 classes appear in
 `sample_eval`'s labels.
 
@@ -235,8 +235,8 @@ The sample set above was made this way. `Data.py` at the repo root dispatches to
 scripts under `data/`, and every stage keeps its own `--help`:
 
 ```bash
-python Data.py                     # list the stages
-python Data.py capture --help      # that stage's options
+python src/Data.py                     # list the stages
+python src/Data.py capture --help      # that stage's options
 ```
 
 | Stage | Script | Does | Needs the rig |
@@ -250,19 +250,19 @@ python Data.py capture --help      # that stage's options
 
 `make_light` and `warp` are plain file work, so a session can be shot on the rig machine
 and rectified anywhere else. Running a script directly is equivalent —
-`python data/warp.py --review` and `python Data.py warp --review` are the same program.
+`python datasets/warp.py --review` and `python src/Data.py warp --review` are the same program.
 
 ```bash
-python Data.py check                       # monitors + webcam
-python Data.py make_light                  # video -> light frames
-python Data.py capture_warp --screen 2     # shoot 10 scenes, rectify as it goes
+python src/Data.py check                       # monitors + webcam
+python src/Data.py make_light                  # video -> light frames
+python src/Data.py capture_warp --screen 2     # shoot 10 scenes, rectify as it goes
 ```
 
 Or keep the two halves apart, which is what leaves the geometry redoable later:
 
 ```bash
-python Data.py capture --screen 2
-python Data.py warp
+python src/Data.py capture --screen 2
+python src/Data.py warp
 ```
 
 `make_light` reads the three `train_light_*.mp4` clips by default. `test_light.mp4` is
@@ -278,11 +278,11 @@ it.
 ### Where it lands
 
 Everything goes under `session.dir` in
-[configs/collect.yaml](../projector_distortion/configs/collect.yaml) — `data/Create_Data`
+[configs/collect.yaml](../src/projector_distortion/configs/collect.yaml) — `datasets/Create_Data`
 by default, and git-ignored:
 
 ```
-data/Create_Data/
+datasets/Create_Data/
 ├── projected/       light_<lightId>.jpg                 [make_light] what the projector emits
 ├── raw_<MMDD>/      surface/surface_<surfaceId>.jpg     [capture]    camera frames, unrectified
 │                    distorted/distorted_<surfaceId>_<lightId>.jpg
@@ -305,8 +305,8 @@ fills today's raw; `warp` takes the newest raw unless `--raw` names another.
 converting:
 
 ```bash
-python demo.py  --input data/Create_Data/warp_0813
-python train.py --data-root data/Create_Data/warp_0813
+python src/demo.py  --input datasets/Create_Data/warp_0813
+python src/train.py --data-root datasets/Create_Data/warp_0813
 ```
 
 ### Settings that are not flags
@@ -314,7 +314,7 @@ python train.py --data-root data/Create_Data/warp_0813
 Only what genuinely changes between runs stayed on the command line. Resolutions, the
 camera backend, the hue bands, the warp geometry and the codec are properties of the rig
 or of the naming convention, so they are set once in
-[configs/collect.yaml](../projector_distortion/configs/collect.yaml):
+[configs/collect.yaml](../src/projector_distortion/configs/collect.yaml):
 
 | Block | Owns |
 |---|---|
@@ -516,14 +516,14 @@ what `record` writes is raw. See
 [--video-pair in README_running.md](../README_running.md#demopy---video-pair--replay-a-recording).
 
 ```bash
-python Data.py record --screen 2 --seconds 30           # rig: shoot it
-python demo.py --video-pair data/recordings/rec_<t>.mp4 # anywhere: restore it
+python src/Data.py record --screen 2 --seconds 30           # rig: shoot it
+python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4 # anywhere: restore it
 ```
 
 | | Default | Change it with |
 |---|---|---|
-| Projected clip | `record.clip` — `data/live/test_light.mp4` | `--clip <path>` |
-| Background | `record.background` — `data/live/BaseBackGround.jpg` | `collect.yaml` |
+| Projected clip | `record.clip` — `datasets/live/test_light.mp4` | `--clip <path>` |
+| Background | `record.background` — `datasets/live/BaseBackGround.jpg` | `collect.yaml` |
 | Output | `record.out_dir/rec_<MMDDHHMMSS>.mp4` + a `.json` beside it | `--out <path>` |
 
 | Option | Default | Meaning |
@@ -539,9 +539,9 @@ over `record.fps_probe` (24) frames, the preview refreshes every `record.preview
 (5) projected frames, and `record.max_queued` (32) camera frames may wait on the encoder.
 
 ```bash
-python Data.py record --screen 2 --seconds 30
-python Data.py record --clip data/live/train_light_1.mp4 --loop
-python Data.py record --warp
+python src/Data.py record --screen 2 --seconds 30
+python src/Data.py record --clip datasets/live/train_light_1.mp4 --loop
+python src/Data.py record --warp
 ```
 
 Recording starts as soon as the window is up — no keypress. `q` stops early, as do the end
@@ -561,20 +561,20 @@ used, plus the measured rate and how many frames the encoder dropped.
 ## Swapping in real data
 
 ```bash
-# 1) fill the same structure under data/SampleData/, then just run
-python demo.py
-python evaluate.py
+# 1) fill the same structure under datasets/SampleData/, then just run
+python src/demo.py
+python src/evaluate.py
 
 # 2) or point at the original dataset directly
-python demo.py --input /mnt/.../WarpData_0520
+python src/demo.py --input /mnt/.../WarpData_0520
 ```
 
 Nothing hard-codes a split name. `--input`/`--gt` and `--data-root` take any folder in a
 recognised layout, so a real dataset can keep its own directory names and split however it
-likes; `data/SampleData/` is only where the bundled one happens to sit.
+likes; `datasets/SampleData/` is only where the bundled one happens to sit.
 
 Training reads its three directories from `train.data` in
-[configs/restoration.yaml](../projector_distortion/configs/restoration.yaml). Each takes a
+[configs/restoration.yaml](../src/projector_distortion/configs/restoration.yaml). Each takes a
 directory, a glob, or a list. Precedence, the `--data-root` fallback and the surface-target
 search order: [README_running.md](../README_running.md#where-the-training-data-comes-from).
 

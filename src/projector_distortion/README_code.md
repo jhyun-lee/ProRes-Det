@@ -2,8 +2,8 @@
 
 What each module owns, how a run flows through them, and the public API.
 
-Script options are in [README_running.md](../README_running.md). The extension recipe for a
-new detector or restorer is in [README.md](../README.md#6-swapping-modules).
+Script options are in [README_running.md](../../README_running.md). The extension recipe for a
+new detector or restorer is in [README.md](../../README.md#6-swapping-modules).
 
 - [Call graph](#call-graph)
 - [Files](#files)
@@ -70,7 +70,7 @@ than at import, because `demo.py` has to read `VIDEO_OUT_KINDS` just to build it
 | [`configs/restoration.yaml`](configs/restoration.yaml) | `model` (backend, weights, input_size) · `ablation` (structure + capacity) · `train` (data paths, hyperparameters, loss weights) |
 | [`configs/detection.yaml`](configs/detection.yaml) | `detector` (backend, conf, imgsz, box gate) · `weights` per backend · `names` (17 classes) |
 | [`configs/live.yaml`](configs/live.yaml) | `rig` (screen, camera, cam_backend, offset, review_calibration) — what `demo.py --live` drives |
-| [`configs/collect.yaml`](configs/collect.yaml) | `session` · `light` · `capture` · `warp` · `record` — read by `Data.py` and the scripts under `data/`, never by this package |
+| [`configs/collect.yaml`](configs/collect.yaml) | `session` · `light` · `capture` · `warp` · `record` — read by `Data.py` and the scripts under `datasets/`, never by this package |
 
 ### `models/`
 
@@ -122,7 +122,7 @@ projection changes: 150/255 inside the quad against 2/255 outside.
 | [`utils/display.py`](utils/display.py) | `Monitor`, `list_monitors`, `place_fullscreen` — Win32 monitor enumeration and borderless placement |
 
 `display.py` is separate because getting a window onto the projector is not a pipeline
-concern, and `data/capture.py` and `data/record.py` need it too. On Windows,
+concern, and `datasets/capture.py` and `datasets/record.py` need it too. On Windows,
 `cv2.setWindowProperty(WND_PROP_FULLSCREEN)` snaps the window back to the primary display
 and silently undoes `cv2.moveWindow()`, which is why a naive `--screen` has no effect;
 geometry goes through the Win32 API instead. `live.place_window` is a one-line wrapper
@@ -203,7 +203,7 @@ from projector_distortion.pipeline import process_sample
 
 restorer = build_restorer("weights/restorer_nafse_unet.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
-root = "data/SampleData/sample_eval"     # distorted/ light/ + surface/ labels/ for scoring
+root = "datasets/SampleData/sample_eval"     # distorted/ light/ + surface/ labels/ for scoring
 for i, s in enumerate(find_samples(root, root)):
     r = process_sample(s, restorer, detector, frame_id=i)
     print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
@@ -229,7 +229,7 @@ checkpoint helpers, `utils` exposes every helper listed above.
 | [`../tests/test_restoration.py`](../tests/test_restoration.py) | `RestorationConfig` and its tags, every toggle building and training one step, forward shapes, checkpoint round trip, the shipped weights, the restorer registry with a third-party backend |
 | [`../tests/test_detection.py`](../tests/test_detection.py) | Registry, label normalisation, the box size gate, both backends against the real checkpoints |
 | [`../tests/test_replay.py`](../tests/test_replay.py) | `demo.py --video-pair` without a rig: timestamp pairing against index pairing, the sidecar's rates and clip, finding the screen on a surround as bright as it, one video per named view, the prompt window sizing |
-| [`../tests/test_collect.py`](../tests/test_collect.py) | `data/warp.py` and `data/make_light.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the rectified stage output and its debug figure |
+| [`../tests/test_collect.py`](../tests/test_collect.py) | `datasets/warp.py` and `datasets/make_light.py` without a rig: corner ordering, boundary resampling, `boundary` vs `homography` equivalence, the rectified stage output and its debug figure |
 
 ```bash
 python -m pytest -q
@@ -237,4 +237,4 @@ python -m pytest -q
 
 ---
 
-[← README](../README.md)
+[← README](../../README.md)

@@ -354,7 +354,7 @@ def cmd_capture(args):
     every = int(cfg("capture", "preview_every", default=10))
     round_settle = float(cfg("capture", "round_settle", default=2.0))
     background_path = cfg_path("capture", "background",
-                               default="data/live/BaseBackGround.jpg")
+                               default="datasets/live/BaseBackGround.jpg")
 
     light_dir = projected_dir()
     light_pool = list(images_in(light_dir).values())

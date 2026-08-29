@@ -39,7 +39,10 @@ import importlib.util
 import os
 import sys
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# src/Data.py -> <root>/datasets: up out of src/, then into the folder the
+# stage scripts and the dataset both live in.
+DATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "datasets")
 
 # stage -> (module file, extra argv, one-line help)
 STAGES = {

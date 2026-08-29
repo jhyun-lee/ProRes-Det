@@ -56,9 +56,9 @@ train:
   # This is the training split only. sample_eval and sample_test are held out for
   # evaluate.py; pointing this at either would score the model on what it fitted.
   data:
-    distorted: "data/SampleData/sample_train/distorted"
-    surface: "data/SampleData/sample_train/surface"
-    light: "data/SampleData/sample_train/light"
+    distorted: "datasets/SampleData/sample_train/distorted"
+    surface: "datasets/SampleData/sample_train/surface"
+    light: "datasets/SampleData/sample_train/light"
 
   epochs: 30
   batch_size: 4

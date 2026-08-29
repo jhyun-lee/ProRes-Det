@@ -1,4 +1,4 @@
-"""data/warp.py - the rectification stage, and the live warp evidence."""
+"""datasets/warp.py - the rectification stage, and the live warp evidence."""
 
 import importlib.util
 import json
@@ -19,7 +19,7 @@ from projector_distortion.utils.visualize import warp_before_after
 # data/ holds standalone scripts, not a package, so they are loaded by path. Their own
 # `common` import needs data/ on sys.path, which is what the scripts do for themselves
 # when run directly.
-_DATA = os.path.join(ROOT, "data")
+_DATA = os.path.join(ROOT, "datasets")
 if _DATA not in sys.path:
     sys.path.insert(0, _DATA)
 

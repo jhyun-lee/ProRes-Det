@@ -111,7 +111,7 @@ def test_the_clip_comes_from_the_recording_that_was_shot_against_it(rig):
     against light the camera never saw - a run that completes and means nothing.
     """
     recording, clip = rig
-    found, source = clip_for(recording, fallback="data/live/test_light.mp4")
+    found, source = clip_for(recording, fallback="datasets/live/test_light.mp4")
     assert found == clip
     assert "json" in source
 
@@ -125,8 +125,8 @@ def test_an_explicit_clip_beats_the_recording(rig):
 def test_a_recording_with_no_sidecar_falls_back(tmp_path):
     path = str(tmp_path / "bare.mp4")
     _write_video(path, [_camera_frame(i) for i in range(4)])
-    found, source = clip_for(path, fallback="data/live/test_light.mp4")
-    assert found == "data/live/test_light.mp4"
+    found, source = clip_for(path, fallback="datasets/live/test_light.mp4")
+    assert found == "datasets/live/test_light.mp4"
     assert source == "the default"
 
 

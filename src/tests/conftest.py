@@ -6,12 +6,13 @@ import sys
 import numpy as np
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(SRC)
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
 
 WEIGHTS = os.path.join(ROOT, "weights")
-DATA = os.path.join(ROOT, "data")
+DATA = os.path.join(ROOT, "datasets")
 
 RESTORER_W = os.path.join(WEIGHTS, "restorer_nafse_unet.pt")
 YOLO_W = os.path.join(WEIGHTS, "detector_yolo11s.pt")

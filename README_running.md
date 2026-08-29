@@ -3,8 +3,8 @@
 Options, input and output for the three root entry points. For install and the
 one-liners that just work, see [README.md](README.md).
 
-Dataset collection is `Data.py` at the repo root, which dispatches to the scripts under
-`data/`; it is documented in [data/README_data.md](data/README_data.md).
+Dataset collection is `src/Data.py`, which dispatches to the scripts under
+`datasets/`; it is documented in [datasets/README_data.md](datasets/README_data.md).
 
 - [What the config files own](#what-the-config-files-own)
 - [`demo.py` — restore → detect](#demopy--restore--detect)
@@ -58,7 +58,7 @@ that is `evaluate.py`'s job.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
+| Input | `datasets/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
 | Output | `output/<timestamp>/` | `--output <dir>` |
 
 | Option | Default | Meaning |
@@ -74,8 +74,8 @@ Images are written at JPEG quality 92. Box size gating comes from
 that clears it is kept, because metric code must not lose duplicates.
 
 ```bash
-python demo.py --input /path/to/pairs
-python demo.py --limit 5 --save-every 0
+python src/demo.py --input /path/to/pairs
+python src/demo.py --limit 5 --save-every 0
 ```
 
 To restore without detecting, pass `--no-detect`, or set `detector.backend: none` in
@@ -95,8 +95,8 @@ replays it: the recording is the `distorted` half, the clip it was shot against 
 `light` half, and one `result.mp4` comes out. No hardware, no rig.
 
 ```bash
-python demo.py --video-pair data/recordings/rec_0828142253.mp4
-python demo.py --video-pair data/recordings/rec_0828142253.mp4 --no-detect \
+python src/demo.py --video-pair datasets/recordings/rec_0828142253.mp4
+python src/demo.py --video-pair datasets/recordings/rec_0828142253.mp4 --no-detect \
                --video-out restored
 ```
 
@@ -120,7 +120,7 @@ restored once and only the compositing is done twice, so the second video is nea
 free. A single view keeps the plain `result.mp4` name every other mode writes.
 
 ```bash
-python demo.py --video-pair rec.mp4 --no-detect --video-out restored panel
+python src/demo.py --video-pair rec.mp4 --no-detect --video-out restored panel
 ```
 
 **You do not have to name the clip.** `Data.py record` wrote which one it projected
@@ -169,7 +169,7 @@ Needs real hardware: a webcam pointed at a screen a projector is throwing to.
 
 Which monitor, which webcam and how far the camera lags are properties of the physical
 setup, so they live in
-[configs/live.yaml](projector_distortion/configs/live.yaml) — set once per machine:
+[configs/live.yaml](src/projector_distortion/configs/live.yaml) — set once per machine:
 
 ```yaml
 rig:
@@ -195,8 +195,8 @@ The requested camera resolution and rate are fixed at 1280×960 @30fps
 Drivers routinely ignore the request, which is why the startup line prints what the
 camera actually opened at.
 
-`Data.py` and the scripts under `data/` read the same kind of settings from
-[configs/collect.yaml](projector_distortion/configs/collect.yaml), under `session:`,
+`Data.py` and the scripts under `datasets/` read the same kind of settings from
+[configs/collect.yaml](src/projector_distortion/configs/collect.yaml), under `session:`,
 `light:`, `capture:`, `warp:` and `record:`. Two files rather than one because the
 collection scripts run without torch and never import the pipeline package.
 
@@ -204,13 +204,13 @@ collection scripts run without torch and never import the pipeline package.
 
 | | Default | Change it with |
 |---|---|---|
-| Projected clip | `data/live/test_light.mp4` — the held-out source | `--clip <path>` |
-| Calibration background | `data/live/BaseBackGround.jpg` | fixed (`DEFAULT_LIVE_BG` in `projector_distortion/cli.py`) |
+| Projected clip | `datasets/live/test_light.mp4` — the held-out source | `--clip <path>` |
+| Calibration background | `datasets/live/BaseBackGround.jpg` | fixed (`DEFAULT_LIVE_BG` in `projector_distortion/cli.py`) |
 | Output | `output/<timestamp>/` + `calib/` + `result.mp4` | `--output <dir>` |
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--screen N` | `rig.screen` (`1`) | Monitor the projector is on, `0` = primary. `python Data.py check` prints the table |
+| `--screen N` | `rig.screen` (`1`) | Monitor the projector is on, `0` = primary. `python src/Data.py check` prints the table |
 | `--camera N` | `rig.camera` (`0`) | Webcam index |
 | `--manual-calib` | off | Click the 4 corners instead of auto-detecting them |
 | `--debug-view` | off | Live window with the pre-warp camera feed and the quad |
@@ -219,9 +219,9 @@ The run goes to the end of the clip, and the analysis stride is always measured 
 than named — see below.
 
 ```bash
-python demo.py --live
-python demo.py --live --screen 2
-python demo.py --live --save-every 30 --debug-view
+python src/demo.py --live
+python src/demo.py --live --screen 2
+python src/demo.py --live --save-every 30 --debug-view
 ```
 
 Press `q` in the `Combined_View` window to stop.
@@ -312,7 +312,7 @@ projector. `--manual-calib` skips straight to clicking, and the review still run
 afterwards.
 
 Set `rig.review_calibration: false` in
-[configs/live.yaml](projector_distortion/configs/live.yaml) for an unattended run,
+[configs/live.yaml](src/projector_distortion/configs/live.yaml) for an unattended run,
 where there is nobody to press a key. Auto-detection then falls back to manual clicking
 on failure, exactly as it did before.
 
@@ -335,7 +335,7 @@ projection drifted in between, that is where it shows.
 ### Long unattended recording
 
 ```bash
-python demo.py --live --save-every 300
+python src/demo.py --live --save-every 300
 ```
 
 The csv covers every frame while images land sparsely, which keeps disk usage predictable.
@@ -349,17 +349,17 @@ Only samples that have both `surface` and `label` are scored.
 
 | | Default | Change it with |
 |---|---|---|
-| Input | `data/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
-| GT | `data/SampleData/sample_eval/` (`surface/` + `labels/`) | `--gt <dir>` |
+| Input | `datasets/SampleData/sample_eval/` (`distorted/` + `light/`) | `--input <dir>` |
+| GT | `datasets/SampleData/sample_eval/` (`surface/` + `labels/`) | `--gt <dir>` |
 | Output | `output/Eval_<input dataset>/` | `--output <dir>` |
 
 `labels/` may hold YOLO `.txt` or LabelMe `.json`; the extension decides which reader runs,
 so the held-out split needs nothing but its path. LabelMe stores class *names*, and those
 are matched against the detector's own class list — see
-[data/README_data.md](data/README_data.md#label-format).
+[datasets/README_data.md](datasets/README_data.md#label-format).
 
 ```bash
-python evaluate.py --input data/SampleData/sample_test --gt data/SampleData/sample_test
+python src/evaluate.py --input datasets/SampleData/sample_test --gt datasets/SampleData/sample_test
 ```
 
 Writes `report.json`, `per_class_<backend>.csv`, `per_image_<backend>.csv`.
@@ -379,10 +379,10 @@ detector:
 ```
 
 ```bash
-python evaluate.py --iou 0.5
+python src/evaluate.py --iou 0.5
 ```
 
-The report directory is named after the input dataset, so `data/SampleData/sample_eval`
+The report directory is named after the input dataset, so `datasets/SampleData/sample_eval`
 scores into `output/Eval_sample_eval/` and the test split into `output/Eval_sample_test/`.
 Re-running the same dataset replaces it, and stale per-backend csvs from the previous run
 are cleared first.
@@ -433,7 +433,7 @@ train:
 Resolution order:
 
 ```
---data-root   >   train.data   >   data/SampleData/sample_train
+--data-root   >   train.data   >   datasets/SampleData/sample_train
 ```
 
 `train.data` ships pointed at `sample_train`, the only split with no labels — training
@@ -447,8 +447,8 @@ relative path there is read against the working directory, not the project root 
 from the repo root, or give absolute paths.
 
 ```bash
-python train.py --epochs 30                                 # uses train.data
-python train.py --data-root data/Create_Data/warp_0813      # one folder, config ignored
+python src/train.py --epochs 30                                 # uses train.data
+python src/train.py --data-root datasets/Create_Data/warp_0813      # one folder, config ignored
 ```
 
 `--data-root` detects the layout and looks for surface targets in this order, reading
@@ -463,7 +463,7 @@ A `distorted` with no matching `surface` or `light` is counted and skipped, not 
 prints how many went each way.
 
 ```
-data: 994 triplets of 1,000 distorted image(s) from distorted=data/SampleData/sample_train/distorted
+data: 994 triplets of 1,000 distorted image(s) from distorted=datasets/SampleData/sample_train/distorted
       skipped 6 without a light, 0 without a surface
 ```
 
@@ -484,8 +484,8 @@ the YAML, the seed is `42` (`SEED` in `train.py`), DataLoader workers are `4`, o
 batch > 4, and every epoch writes an `epoch_N.pt`.
 
 ```bash
-python train.py --epochs 30
-python train.py --resume runs/0730_1948_30ep_FULL/restorer_FULL_best.pt --epochs 10
+python src/train.py --epochs 30
+python src/train.py --resume runs/0730_1948_30ep_FULL/restorer_FULL_best.pt --epochs 10
 ```
 
 Loss is `L1 + perceptual + SSIM + wavelet`, weighted from `train.loss`. Each triplet is
@@ -524,7 +524,7 @@ ablation:
 ```
 
 ```bash
-python train.py --epochs 30      # writes runs/<date>_30ep_NoCA/
+python src/train.py --epochs 30      # writes runs/<date>_30ep_NoCA/
 ```
 
 Checkpoints embed their own architecture config, so the `ablation:` block does not have

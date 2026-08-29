@@ -11,7 +11,10 @@ from typing import Any, Dict, Optional
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(_PKG_DIR, "configs")
-PROJECT_ROOT = os.path.dirname(_PKG_DIR)
+# <root>/src/projector_distortion -> <root>. Two levels: the package lives
+# under src/, and everything a config points at (datasets/, weights/, output/)
+# sits beside src/, not inside it.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_PKG_DIR))
 
 
 def load_yaml(path) -> Dict[str, Any]:
