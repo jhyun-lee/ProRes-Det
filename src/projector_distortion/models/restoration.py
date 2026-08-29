@@ -282,10 +282,25 @@ def save_checkpoint(path, model: nn.Module, cfg: RestorationConfig, **extra):
 
 
 def _torch_load(path, device):
+    """
+    Read a checkpoint, preferring the safe loader and falling back for older files.
+
+    A file torch cannot parse at all comes back as a RuntimeError rather than a
+    pickle traceback: every caller already treats RuntimeError as "this checkpoint
+    is unusable" and answers it with one line, and a truncated download should read
+    the same way as a missing file rather than as a crash.
+    """
     try:
         return torch.load(path, map_location=device, weights_only=True)
     except Exception:
+        pass
+    try:
         return torch.load(path, map_location=device)
+    except Exception as e:
+        raise RuntimeError(
+            f"{path} is not a readable checkpoint ({type(e).__name__}: {e}). "
+            f"A truncated or partially downloaded file is the usual cause."
+        ) from e
 
 
 def _strip_prefixes(state_dict):

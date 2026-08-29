@@ -174,6 +174,20 @@ def test_a_pre_rename_arch_tag_still_loads():
         assert meta["arch"] == LEGACY_ARCH_NAME
 
 
+def test_an_unreadable_checkpoint_is_a_runtime_error_not_a_pickle_traceback(tmp_path):
+    """
+    A truncated download should read like a missing file, not like a crash.
+
+    Every caller already answers RuntimeError with one line - cli.build_models for
+    demo/evaluate, train.py for --resume - so surfacing the pickle failure as one
+    is what keeps a corrupt file from printing a stack trace at the user.
+    """
+    broken = tmp_path / "broken.pt"
+    broken.write_bytes(os.urandom(512))
+    with pytest.raises(RuntimeError, match="not a readable checkpoint"):
+        load_checkpoint(str(broken), device="cpu")
+
+
 def test_missing_checkpoint_raises_filenotfound():
     with pytest.raises(FileNotFoundError):
         load_checkpoint("does/not/exist.pt")

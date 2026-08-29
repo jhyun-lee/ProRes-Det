@@ -217,7 +217,12 @@ def main(argv=None):
     net = None
     cfg = RestorationConfig.from_dict(rest_cfg.get("ablation") or {})
     if args.resume:
-        net, cfg, meta = load_checkpoint(resolve_path(args.resume), device=device)
+        # A mistyped --resume is a typo, not a bug, and every other entry point
+        # answers one with a line rather than a traceback.
+        try:
+            net, cfg, meta = load_checkpoint(resolve_path(args.resume), device=device)
+        except (FileNotFoundError, RuntimeError) as e:
+            raise SystemExit(f"could not resume from {args.resume}\n    {e}") from e
         print(f"resuming from {args.resume} (cfg via {meta['cfg_source']})")
 
     tag = cfg.tag()
