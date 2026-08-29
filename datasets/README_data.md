@@ -381,8 +381,6 @@ Lists the displays and opens the webcam, so `capture` is not the first attempt.
 |---|---|---|
 | `--src <path>...` | `light.src` — the three `train_light_*.mp4` | Any mix of video files and folders of them |
 | `--out <dir>` | `<session.dir>/projected` | — |
-| `--step N` | `light.step` (`30`) | Keep every Nth frame. 30 = one per second at 30fps |
-| `--augment <mode>` | `light.augment` (`full`) | Copies per source frame: `full` = original + inverted + 4 hue rotations (6×), `invert` = 2×, `none` = 1× |
 | `--limit N` | `0` | At most N *source* frames per video, before augmentation |
 
 Written as `light_<tag>_<videoIdx>_<frameIdx>_<variant>.jpg`, where `variant` is `0`,
@@ -404,7 +402,6 @@ the hue angles for a reproducible run.
 | `--camera N` | `capture.camera` (`0`) | — |
 | `--rounds N` | `capture.rounds` (`10`) | Scene setups; each starts with a fresh surface shot |
 | `--limit N` | `capture.limit` (`50`) | Light frames drawn per round, at random from the whole pool. `0` uses every frame |
-| `--settle-ms N` | `capture.settle_ms` (`1200`) | How long a light frame is held before its capture is kept |
 | `--warp` | off | Also rectify as you shoot. `Data.py capture_warp` is this flag |
 
 **How a round works.** `capture` projects the background and waits for you to press `s`.
@@ -429,7 +426,7 @@ dismantled.
 Whatever corners are in force when `s` is pressed are written into `collect_meta.json`,
 and `warp` reuses them instead of detecting again — they were measured with someone
 watching the rectified preview, which is the one moment anybody can tell a good boundary
-from a bad one. `warp --redetect` ignores them.
+from a bad one.
 
 **Timing.** `capture.settle_ms` (1200 ms) and `capture.flush` (3) are what keep a capture
 matched to the frame that caused it. The camera is read for the whole settle window rather
@@ -453,11 +450,8 @@ rig. A round whose corners are unusable is captured raw only and reported as suc
 | `--out <dir>` | `<session.dir>/warp_<MMDD>`, named after the raw | — |
 | `--mode boundary` | `warp.mode` (default) | 4 corners + the measured edge bow |
 | `--mode homography` | — | Corners only. For a flat screen with a clean boundary |
-| `--mode tps` | — | The legacy thin-plate spline. Needs `opencv-python<5` |
 | `--limit N` | `0` | Process at most N scenes |
 | `--review` | off | Show every scene and wait for a verdict |
-| `--manual` | off | Skip auto-detection, click the corners on every scene |
-| `--redetect` | off | Ignore the corners `capture` recorded and detect again |
 
 Rectification runs at `warp.work_size` (1280×720) with `warp.points` (20) boundary
 correspondences and the boundary pulled `warp.inset` (2) px in off the bright projection
@@ -471,7 +465,8 @@ finds the screen boundary in the surface shot, then rectifies that scene's surfa
 and the only difference left is the projected light.
 
 `boundary` is exact for a flat screen seen off-axis and still right when the edges bow.
-OpenCV 5 removed the shape module, which is what `tps` needs.
+`homography` is the corner-only model, which is the same thing when the edges are
+straight. Both live under `warp.mode` in collect.yaml; neither is a flag.
 
 **`--review`.** Boundary detection is a contour heuristic on a photograph: right most of
 the time, and wrong in ways the summary line cannot show. `--review` puts each scene on

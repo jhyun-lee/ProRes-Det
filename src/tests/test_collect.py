@@ -121,15 +121,6 @@ def test_rectifier_rejects_a_boundary_that_is_not_quad_like():
         warp.Rectifier(circle, SIZE)
 
 
-def test_tps_mode_explains_itself_when_opencv_dropped_the_shape_module():
-    if hasattr(cv2, "createThinPlateSplineShapeTransformer"):
-        pytest.skip("this OpenCV still ships the shape module")
-    with pytest.raises(SystemExit, match="shape module"):
-        warp.build_tps(np.zeros((4, 2), np.float32), np.zeros((4, 2), np.float32))
-
-
-# --- the Create_Data layout on disk -------------------------------------------
-
 def _raw_set(root, captures, source=None):
     """
     A raw_<MMDD> folder, and the projected/ that sits beside it.

@@ -149,7 +149,6 @@ def build_parser():
                    help="default: train.lr in configs/restoration.yaml")
     p.add_argument("--sample", type=int, default=0, help="cap the triplet count")
     p.add_argument("--resume", default=None, help="checkpoint to continue from")
-    p.add_argument("--no-amp", action="store_true")
     p.add_argument("--device", default=None, help="cuda | cpu (default: cuda if present)")
     return p
 
@@ -270,7 +269,9 @@ def main(argv=None):
     wavelet = HighFrequencyWaveletLoss(3).to(device)
     ssim_fn = _ssim_module(device)
 
-    use_amp = (not args.no_amp) and device == "cuda"
+    # AMP follows the device: it is a speed knob with no effect on CPU, and
+    # nothing in a run needs it turned off selectively.
+    use_amp = device == "cuda"
     scaler = torch.amp.GradScaler(device) if use_amp else None
     history, best = [], float("inf")
 

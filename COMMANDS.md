@@ -121,9 +121,7 @@ Two mp4s in, one or more out. No hardware.
 | Option | Default | Meaning |
 |---|---|---|
 | `--video-pair <mp4>` | — (required) | A `Data.py record` mp4 to replay |
-| `--video-out <kind>...` | `panel` | `panel` (2×2) · `restored` (alone) · `compare` (side by side). Several allowed |
-| `--offset-ms F` | `200` | Projector → camera latency. From `rig.offset` (6) at `CAM_FPS` (30) |
-| `--manual-calib` | off | Click the 4 screen corners instead of finding them |
+| `--video-out <kind>...` | `panel` | `panel` (2×2) · `restored` (the restored frame alone). Both allowed |
 | `--no-review` | off | Skip the calibration verdict window, for an unattended run |
 
 ```bash
@@ -146,7 +144,6 @@ Needs a webcam pointed at a screen a projector is throwing to.
 | `--live` | off | Drive the rig |
 | `--screen N` | `rig.screen` (`1`) | Monitor the projector is on. `0` = primary |
 | `--camera N` | `rig.camera` (`0`) | Webcam index |
-| `--manual-calib` | off | Click the 4 corners instead of auto-detecting |
 | `--debug-view` | off | Extra window: the pre-warp feed with the quad on it |
 
 ```bash
@@ -193,7 +190,6 @@ Scoring several detectors in one report is a config edit, not a flag — put a l
 | `--lr F` | `0.0002` | From `train.lr` |
 | `--sample N` | `0` | Cap the triplet count — a seeded random draw. `0` = all |
 | `--resume <ckpt>` | — | Continue from a checkpoint |
-| `--no-amp` | off | Disable mixed precision |
 | `--device cuda\|cpu` | cuda if present | — |
 
 ```bash
@@ -247,14 +243,11 @@ python src/Data.py check --camera 1
 |---|---|---|
 | `--src <path>...` | the three `train_light_*.mp4` | Video files, or folders of them |
 | `--out <dir>` | `datasets/Create_Data/projected` | — |
-| `--step N` | `30` | Keep every Nth frame. 30 = one per second at 30fps |
-| `--augment <mode>` | `full` | `full` (6×) · `invert` (2×) · `none` (1×) |
 | `--limit N` | `0` | At most N *source* frames per video, before augmentation |
 
 ```bash
 python src/Data.py make_light
-python src/Data.py make_light --src /path/clip.mp4 --step 15
-python src/Data.py make_light --augment none --limit 100
+python src/Data.py make_light --src /path/clip.mp4 --limit 100
 ```
 
 `test_light.mp4` is left out on purpose, so a set collected here shares no projected
@@ -269,7 +262,6 @@ frame with the held-out split.
 | `--camera N` | `capture.camera` (`0`) | — |
 | `--rounds N` | `10` | Scene setups; each starts with a fresh surface shot |
 | `--limit N` | `50` | Light frames drawn per round. `0` = every frame |
-| `--settle-ms N` | `1200` | How long a light frame is held before its capture is kept |
 | `--warp` | off | Also rectify as you shoot (this is `capture_warp`) |
 
 ```bash
@@ -289,11 +281,8 @@ restoration, which needs many surfaces rather than many lights on one.
 |---|---|---|
 | `--raw <dir>` | the newest `raw_<MMDD>` | Which capture folder to rectify |
 | `--out <dir>` | `warp_<MMDD>` matching the raw | — |
-| `--mode <m>` | `boundary` | `boundary` · `homography` · `tps` (needs OpenCV < 5) |
 | `--limit N` | `0` | Process at most N scenes |
 | `--review` | off | Check every scene on screen and fix the bad ones |
-| `--manual` | off | Click the corners on every scene |
-| `--redetect` | off | Re-run detection instead of reusing recorded corners |
 
 ```bash
 python src/Data.py warp
@@ -425,9 +414,9 @@ runs:
 | Live rig: monitor, webcam, latency, calibration review | `rig:` in `live.yaml` |
 | Collection rig, session folders, warp geometry, codec | `collect.yaml` |
 
-The three that do have an override — `--screen`, `--camera` and (replay only)
-`--offset-ms` — are the ones someone gets wrong on the first run of a session, where an
-aborted run should not cost a file edit.
+The two that do have an override — `--screen` and `--camera` — are the ones someone
+gets wrong on the first run of a session, where an aborted run should not cost a file
+edit.
 
 ```yaml
 # projector_distortion/configs/detection.yaml

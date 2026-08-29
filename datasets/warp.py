@@ -37,11 +37,10 @@ session that only has raw/ is not a layout the loaders recognise at all. After i
 `surface` and `distorted` share a pixel grid and the residual the model learns is only
 the projected light.
 
-Three modes:
+Two modes, set by `warp.mode` in collect.yaml:
 
     boundary     4 corners + the measured edge bow  (default)
     homography   corners only, the exact model for a flat screen
-    tps          the legacy warp; needs OpenCV < 5
 """
 
 import argparse
@@ -207,27 +206,6 @@ def boundary_map(paths, corners, size):
     return np.ascontiguousarray(grid[..., 0]), np.ascontiguousarray(grid[..., 1])
 
 
-def build_tps(src, dst):
-    tps_factory = getattr(cv2, "createThinPlateSplineShapeTransformer", None)
-    if tps_factory is None:
-        raise SystemExit(
-            "--warp tps needs OpenCV's shape module, which OpenCV 5 dropped.\n"
-            "    use --warp boundary (curved edges too) or --warp homography, or pin "
-            "opencv-python<5.")
-    tps = tps_factory()
-    matches = [cv2.DMatch(i, i, 0) for i in range(len(src))]
-    tps.estimateTransformation(dst.reshape(1, -1, 2), src.reshape(1, -1, 2), matches)
-    return tps
-
-
-def fit(img, w, h):
-    """Crop or pad to exactly w x h; TPS returns the input canvas, not the rectangle."""
-    out = np.zeros((h, w, 3), img.dtype)
-    ih, iw = min(h, img.shape[0]), min(w, img.shape[1])
-    out[:ih, :iw] = img[:ih, :iw]
-    return out
-
-
 class Rectifier:
     """
     One scene's camera -> flat screen mapping, built once and reused for every capture.
@@ -252,8 +230,6 @@ class Rectifier:
         elif mode == "homography":
             rect = np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)
             self._matrix = cv2.getPerspectiveTransform(self.corners, rect)
-        elif mode == "tps":
-            self._tps = build_tps(self.src, self.dst)
         else:
             raise ValueError(f"unknown warp mode: {mode}")
 
@@ -262,9 +238,7 @@ class Rectifier:
         if self.mode == "boundary":
             return cv2.remap(img, self._map[0], self._map[1], cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_REPLICATE)
-        if self.mode == "homography":
-            return cv2.warpPerspective(img, self._matrix, (w, h))
-        return fit(self._tps.warpImage(img), w, h)
+        return cv2.warpPerspective(img, self._matrix, (w, h))
 
 
 def debug_overlay(img, contour, src_points):
@@ -486,7 +460,7 @@ def cmd_warp(args):
     from projector_distortion.data import surface_id
     from projector_distortion.utils.visualize import warp_before_after
 
-    mode = pick(args.mode, "warp", "mode", default="boundary")
+    mode = pick(None, "warp", "mode", default="boundary")
     work = tuple(cfg("warp", "work_size", default=list(WORK_SIZE)))
     final = tuple(cfg("warp", "final_size", default=[640, 360]))
     points = int(cfg("warp", "points", default=WARP_POINTS))
@@ -520,7 +494,7 @@ def cmd_warp(args):
     print(f"{len(names)} scene(s), {len(distorted_files)} capture(s) | "
           f"warp={mode} | {work[0]}x{work[1]} -> {final[0]}x{final[1]}")
 
-    presets = {} if args.redetect else recorded_corners(args.raw)
+    presets = recorded_corners(args.raw)
     if presets:
         print(f"{len(presets)} scene(s) carry corners recorded at capture time; "
               f"--redetect ignores them.")
@@ -539,7 +513,7 @@ def cmd_warp(args):
         preset = presets.get(sid)
         rectifier, contour, verdict = settle_scene(
             img, name, work, mode, points, inset,
-            review=review, manual_first=args.manual, preset=preset)
+            review=review, manual_first=False, preset=preset)
         if verdict == "quit":
             print("  stopped by user; the scenes already written are kept.")
             break
@@ -613,19 +587,11 @@ def build_parser():
     p.add_argument("--out", default=None,
                    help="where the pairs go (default: <session.dir>/warp_<MMDD>, "
                         "named after the raw folder)")
-    p.add_argument("--mode", default=None, choices=["boundary", "homography", "tps"],
-                   help="boundary: 4 corners + the measured edge bow | homography: "
-                        "corners only | tps: the legacy warp, needs OpenCV < 5 "
-                        "(default: warp.mode in collect.yaml)")
     p.add_argument("--limit", type=int, default=0, help="process at most N scenes")
     p.add_argument("--review", action="store_true",
                    help="show each scene's detected quad and its rectified result, "
                         "then choose: accept, click the corners by hand, re-detect, "
                         "skip, accept the rest, or quit")
-    p.add_argument("--manual", action="store_true",
-                   help="skip auto-detection and click the 4 corners on every scene")
-    p.add_argument("--redetect", action="store_true",
-                   help="ignore the corners capture.py recorded and detect again")
     return p
 
 

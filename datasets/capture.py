@@ -349,7 +349,7 @@ def cmd_capture(args):
     backend = cfg("capture", "cam_backend", default="auto")
     rounds = pick(args.rounds, "capture", "rounds", default=10)
     limit = pick(args.limit, "capture", "limit", default=50)
-    settle_ms = pick(args.settle_ms, "capture", "settle_ms", default=1200)
+    settle_ms = pick(None, "capture", "settle_ms", default=1200)
     flush = int(cfg("capture", "flush", default=3))
     every = int(cfg("capture", "preview_every", default=10))
     round_settle = float(cfg("capture", "round_settle", default=2.0))
@@ -543,11 +543,6 @@ def build_parser():
                    help="also rectify as you shoot, into warp_<MMDD>/surface and "
                         "warp_<MMDD>/distorted. raw_<MMDD>/ is written either way "
                         "(`Data.py capture_warp` is this flag)")
-    p.add_argument("--settle-ms", type=int, default=None,
-                   help="milliseconds a light frame is held before its capture is "
-                        "kept; the camera is read throughout, so this is also how "
-                        "long auto-exposure gets to re-converge "
-                        "(default: capture.settle_ms)")
     return p
 
 

@@ -40,7 +40,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from ..utils.visualize import PANEL_GAP, caption, panel_size
+from ..utils.visualize import caption, panel_size
 from .offline import build_panel, process_pair
 
 # `live` is imported inside the functions that warp, not here: it drags in the Win32
@@ -63,7 +63,7 @@ CALIB_MIN_AREA_FRAC = 0.02
 # one 410k px region and the corners stop moving; 51, 71 and 91 agree to the pixel.
 CALIB_CLOSE_KERNEL = 51
 
-VIDEO_OUT_KINDS = ("panel", "restored", "compare")
+VIDEO_OUT_KINDS = ("panel", "restored")
 
 CALIB_WINDOW = "Replay_Calibration"
 
@@ -476,22 +476,10 @@ def calibrate(cap, out_size, manual=False, review=True, recorder=None):
 
 # -------------------------------------------------------------------- the output
 
-def build_compare(result, detector_name="detector") -> np.ndarray:
-    """distorted | restored, side by side, captioned on the image."""
-    left = result.distorted_det.copy()
-    right = result.restored_det.copy()
-    caption(left, "distorted")
-    caption(right, "restored")
-    gap = np.full((left.shape[0], PANEL_GAP, 3), 255, np.uint8)
-    return np.hstack([left, gap, right])
-
-
 def build_frame(result, kind, detector_name="detector") -> np.ndarray:
     """The image this run writes to result.mp4, per --video-out."""
     if kind == "restored":
         return result.restored
-    if kind == "compare":
-        return build_compare(result, detector_name)
     return build_panel(result, detector_name)
 
 
@@ -533,8 +521,6 @@ def output_size(kind, input_size) -> Tuple[int, int]:
     w, h = int(input_size[0]), int(input_size[1])
     if kind == "restored":
         return (w, h)
-    if kind == "compare":
-        return (w * 2 + PANEL_GAP, h)
     return panel_size(w, h)
 
 

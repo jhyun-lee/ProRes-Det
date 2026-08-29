@@ -97,9 +97,6 @@ def build_parser():
                           "Name several to write one video each, off the same pass: "
                           "--video-out restored panel -> result_restored.mp4 + "
                           "result_panel.mp4 (default: panel)")
-    rep.add_argument("--offset-ms", type=float, default=None,
-                     help="projector->camera latency in ms (default: rig.offset in "
-                          "configs/live.yaml, read as live-loop frames)")
     rep.add_argument("--no-review", action="store_true",
                      help="skip the calibration verdict window (default: ask, the "
                           "same as rig.review_calibration does live)")
@@ -112,8 +109,6 @@ def build_parser():
                            "`python Data.py check` prints the table)")
     live.add_argument("--camera", type=int, default=None,
                       help="webcam index (default: rig.camera in configs/live.yaml)")
-    live.add_argument("--manual-calib", action="store_true",
-                      help="click the 4 corners instead of auto-detecting them")
     live.add_argument("--debug-view", action="store_true",
                       help="live window with the pre-warp camera feed + the quad")
 
@@ -203,7 +198,7 @@ def _run_live(args, restorer, detector, rec, box_filter):
         cam_backend=str(rig.get("cam_backend", "auto")),
         offset=int(rig.get("offset", 6)), detector_name=detector.name,
         review_calib=bool(rig.get("review_calibration", True)),
-        manual_calib=args.manual_calib, debug_view=args.debug_view, **box_filter)
+        debug_view=args.debug_view, **box_filter)
 
 
 def _run_replay(args, restorer, detector, rec, box_filter):
@@ -231,9 +226,8 @@ def _run_replay(args, restorer, detector, rec, box_filter):
 
     return run_replay(
         recording, clip, restorer, detector, rec, limit=args.limit,
-        offset_sec=None if args.offset_ms is None else args.offset_ms / 1000.0,
         offset_frames=int(rig.get("offset", 6)),
-        video_out=args.video_out, manual_calib=args.manual_calib,
+        video_out=args.video_out,
         review_calib=(not args.no_review) and bool(rig.get("review_calibration", True)),
         detector_name=detector.name, **box_filter)
 

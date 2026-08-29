@@ -124,7 +124,7 @@ def collect_videos(sources):
 
 
 def cmd_light(args):
-    out_dir = args.out or projected_dir(create=True)
+    out_dir = projected_dir(create=True)
     os.makedirs(out_dir, exist_ok=True)
     print(f"projected: {out_dir}")
 
@@ -133,8 +133,8 @@ def cmd_light(args):
         raise SystemExit("no video found. Pass --src, or check light.src in "
                          "configs/collect.yaml.")
 
-    step = pick(args.step, "light", "step", default=30)
-    mode = pick(args.augment, "light", "augment", default="full")
+    step = pick(None, "light", "step", default=30)
+    mode = pick(None, "light", "augment", default="full")
     size = tuple(cfg("light", "size", default=[1280, 720]))
     bands = [tuple(b) for b in cfg("light", "hue_bands",
                                    default=[[0, 45], [45, 90], [90, 140], [140, 180]])]
@@ -166,19 +166,12 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="Data.py make_light", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--out", default=None,
-                   help="where the light frames go (default: the shared "
-                        "<session.dir>/projected)")
+    # `step`, `augment` and the output folder are properties of the naming
+    # convention and the session layout, not of one run: they live under `light:`
+    # and `session:` in collect.yaml. What is left is which video, and how much of it.
     p.add_argument("--src", nargs="+", default=None,
                    help="video file(s) and/or folder(s) of them "
                         "(default: light.src in collect.yaml)")
-    p.add_argument("--step", type=int, default=None,
-                   help="keep every Nth frame (default: light.step, 30 = one per "
-                        "second at 30fps)")
-    p.add_argument("--augment", choices=AUGMENT_MODES, default=None,
-                   help="copies per source frame: full = original + inverted + 4 hue "
-                        "rotations (6x), invert = 2x, none = 1x "
-                        "(default: light.augment)")
     p.add_argument("--limit", type=int, default=0,
                    help="at most N source frames per video, before augmentation")
     return p

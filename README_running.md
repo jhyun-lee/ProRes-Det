@@ -109,9 +109,7 @@ python src/demo.py --video-pair datasets/recordings/rec_0828142253.mp4 --no-dete
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--video-out <kind>...` | `panel` | `panel` (2×2), `restored` (the restored frame alone), `compare` (distorted ‖ restored). Several are allowed |
-| `--offset-ms F` | `rig.offset` at `CAM_FPS` — 200 ms | Projector → camera latency |
-| `--manual-calib` | off | Click the 4 screen corners instead of finding them |
+| `--video-out <kind>...` | `panel` | `panel` (2×2), `restored` (the restored frame alone). Both are allowed |
 | `--no-review` | off | Skip the calibration verdict window, for an unattended run |
 
 **One pass, as many views as you name.** `--video-out restored panel` writes
@@ -212,7 +210,6 @@ collection scripts run without torch and never import the pipeline package.
 |---|---|---|
 | `--screen N` | `rig.screen` (`1`) | Monitor the projector is on, `0` = primary. `python src/Data.py check` prints the table |
 | `--camera N` | `rig.camera` (`0`) | Webcam index |
-| `--manual-calib` | off | Click the 4 corners instead of auto-detecting them |
 | `--debug-view` | off | Live window with the pre-warp camera feed and the quad |
 
 The run goes to the end of the clip, and the analysis stride is always measured rather
@@ -308,8 +305,7 @@ If auto-detection found nothing there is nothing to accept — only `m`, `r` and
 window still comes up, showing the camera next to a red *no screen boundary found*, so
 the gate never looks like a hang. The key bindings are drawn along the bottom of the
 figure as well as printed, because on the rig the terminal is behind a fullscreen
-projector. `--manual-calib` skips straight to clicking, and the review still runs
-afterwards.
+projector. `m` skips straight to clicking without leaving the window.
 
 Set `rig.review_calibration: false` in
 [configs/live.yaml](src/projector_distortion/configs/live.yaml) for an unattended run,
@@ -476,7 +472,6 @@ data: 994 triplets of 1,000 distorted image(s) from distorted=datasets/SampleDat
 | `--lr F` | `0.0002` | From `train.lr` |
 | `--sample N` | `0` | Cap how many triplets are used |
 | `--resume <ckpt>` | — | Continue from a checkpoint. Its architecture wins over `ablation:` |
-| `--no-amp` | off | Disable mixed precision on CUDA |
 | `--device cuda\|cpu` | cuda if present | — |
 
 Fixed rather than flagged: the gradient accumulation window is `train.accum_steps` in
