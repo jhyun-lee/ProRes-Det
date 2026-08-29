@@ -1,6 +1,6 @@
 # ProRes-Det
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22153821.svg)](https://doi.org/10.5281/zenodo.22153821)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22153821-1682D4)](https://doi.org/10.5281/zenodo.22153821)
 
 **Pro**jector **Res**toration + **Det**ection
 
@@ -118,7 +118,7 @@ python src/Data.py record --screen 2 --seconds 30               # on the rig
 python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4 # anywhere, later
 ```
 
-![The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the `(distorted, light)` pairs come from exactly this setup.](Image/BeamPro.jpg)
+<img src="Image/BeamPro.jpg" width="240" alt="The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the (distorted, light) pairs come from exactly this setup.">
 
 Collecting your own data is `Data.py`, which dispatches to the stage scripts under
 `datasets/` — `check`, `make_light`, `capture`, `warp`, `record`. Everything lands
