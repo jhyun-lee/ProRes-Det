@@ -118,7 +118,9 @@ python src/Data.py record --screen 2 --seconds 30               # on the rig
 python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4 # anywhere, later
 ```
 
-<img src="Image/BeamPro.jpg" width="240" alt="The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the (distorted, light) pairs come from exactly this setup.">
+<p align="center">
+  <img src="Image/BeamPro.jpg" width="240" alt="The capture rig: a short-throw projector overhead, a camera on the same arm, and the objects laid out on the table under the projected pattern — the (distorted, light) pairs come from exactly this setup.">
+</p>
 
 Collecting your own data is `Data.py`, which dispatches to the stage scripts under
 `datasets/` — `check`, `make_light`, `capture`, `warp`, `record`. Everything lands
