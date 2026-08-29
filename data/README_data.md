@@ -580,4 +580,4 @@ search order: [README_running.md](../README_running.md#where-the-training-data-c
 
 ---
 
-[한국어](README_data.ko.md) · [← README](../README.md)
+[← README](../README.md)

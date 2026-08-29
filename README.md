@@ -421,7 +421,3 @@ release by Zenodo; use the one matching the version you ran.
 Questions, bug reports and attribution corrections:
 [ljhyun0821@gnu.ac.kr](mailto:ljhyun0821@gnu.ac.kr), or open an issue on the
 repository.
-
----
-
-[한국어](README.ko.md)

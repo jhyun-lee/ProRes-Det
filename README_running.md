@@ -623,4 +623,4 @@ not worth the retrain.
 
 ---
 
-[한국어](README_running.ko.md) · [← README](README.md)
+[← README](README.md)

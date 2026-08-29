@@ -447,4 +447,4 @@ rig:
 
 ---
 
-[한국어](COMMANDS.ko.md) · [← README](README.md)
+[← README](README.md)

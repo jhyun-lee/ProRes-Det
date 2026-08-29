@@ -185,4 +185,4 @@ an Optuna sweep on this dataset. Implementation: [train.py](../train.py).
 
 ---
 
-[한국어](README_weights.ko.md) · [← README](../README.md)
+[← README](../README.md)

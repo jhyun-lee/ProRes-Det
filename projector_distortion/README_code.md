@@ -237,4 +237,4 @@ python -m pytest -q
 
 ---
 
-[한국어](README_code.ko.md) · [← README](../README.md)
+[← README](../README.md)
