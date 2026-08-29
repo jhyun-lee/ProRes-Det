@@ -56,27 +56,15 @@ around the same files and take the identical flags:
 
 ## Install
 
-Python ≥ 3.9.
-
-| Command | Installs |
-|---|---|
-| `pip install -e ".[all]" -r requirements-cuda.txt` | Everything, GPU build of torch |
-| `pip install -e ".[all]"` | Everything, CPU-only torch |
-| `pip install -e ".[yolo]"` | The `yolo` detector backend |
-| `pip install -e ".[train]"` | What `train.py` needs |
-| `pip install -e ".[live]"` | `--live` on non-Windows |
-| `pip install -e ".[test]"` | pytest |
-
-Quote the brackets — they are glob characters in zsh.
+Python >= 3.9. Extras: `[yolo]` `[train]` `[live]` `[test]` `[all]`.
 
 ```bash
-python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-# 2.9.0+cu128 True
+pip install -e ".[all]" -r requirements-cuda.txt    # GPU
+pip install -e ".[all]"                             # CPU only
 ```
 
-`requirements-cuda.txt` is needed because the default PyPI `torch` carries no CUDA on
-Windows. Every entry point prints the device it resolved as its first line, so a run
-that quietly fell back to the CPU says so.
+Why the CUDA file is separate, and how to confirm the GPU took:
+[README.md](README.md#1-install).
 
 ---
 
@@ -209,7 +197,9 @@ turned off, so a variant stays identifiable from its path.
 ## `Data.py` — collect a dataset
 
 One entry point that dispatches to the standalone scripts under `datasets/`. Each stage
-keeps its own `--help`, and running the script directly is equivalent.
+keeps its own `--help`, and running the script directly is equivalent. What each stage
+*does*, how a round works and how often the scene has to change:
+[datasets/README_data.md](datasets/README_data.md).
 
 ```bash
 python src/Data.py                  # list the stages
@@ -250,9 +240,6 @@ python src/Data.py make_light
 python src/Data.py make_light --src /path/clip.mp4 --limit 100
 ```
 
-`test_light.mp4` is left out on purpose, so a set collected here shares no projected
-frame with the held-out split.
-
 ### `capture` — projector + webcam → raw captures
 
 | Option | Default | Meaning |
@@ -271,10 +258,6 @@ python src/Data.py capture --rounds 20 --limit 25      # 500 pairs over 20 scene
 python src/Data.py capture --rounds 4 --limit 250      # 1,000 pairs over 4 scenes
 ```
 
-Defaults are 10 scenes × 50 = **500 pairs**. `--limit 0` means every frame in the pool,
-which after a default `make_light` is thousands on a single scene — the wrong trade for
-restoration, which needs many surfaces rather than many lights on one.
-
 ### `warp` — raw captures → aligned pairs
 
 | Option | Default | Meaning |
@@ -289,10 +272,6 @@ python src/Data.py warp
 python src/Data.py warp --review
 python src/Data.py warp --raw datasets/Create_Data/raw_0813
 ```
-
-This stage is not optional: the screen is a trapezoid in the camera, so nothing before
-it is trainable, and a session that only has `raw/` is not a layout the loaders
-recognise.
 
 ### `record` — project and record, no models
 
@@ -311,9 +290,6 @@ python src/Data.py record --screen 2 --seconds 30
 python src/Data.py record --clip datasets/live/train_light_1.mp4 --loop
 python src/Data.py record --warp
 ```
-
-Recording starts as soon as the window is up — no keypress. Leave `--warp` off if the
-recording is going to `demo.py --video-pair`, which rectifies it itself.
 
 ---
 

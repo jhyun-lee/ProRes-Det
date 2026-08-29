@@ -243,15 +243,14 @@ configs/*.yaml  <  CLI flags
 
 | File | Holds |
 |---|---|
-| [configs/restoration.yaml](src/projector_distortion/configs/restoration.yaml) | Restoration backend and weights, input size, structural toggles, training hyperparameters, loss weights, training data paths |
-| [configs/detection.yaml](src/projector_distortion/configs/detection.yaml) | Backend, per-backend weights, conf threshold, box size filter, the 17 class names — which is also what LabelMe class *names* are matched against |
-| [configs/live.yaml](src/projector_distortion/configs/live.yaml) | The `--live` rig: monitor, webcam, camera backend, projector→camera latency, whether to review the calibration |
-| [configs/collect.yaml](src/projector_distortion/configs/collect.yaml) | Everything `Data.py` reads: session folders, light extraction, the capture rig, warp geometry, recording |
+| [restoration.yaml](src/projector_distortion/configs/restoration.yaml) | Restoration backend, weights, input size, the ablation toggles, training hyperparameters and loss weights |
+| [detection.yaml](src/projector_distortion/configs/detection.yaml) | Detector backend, per-backend weights, confidence floor, box size gate, the 17 class names |
+| [live.yaml](src/projector_distortion/configs/live.yaml) | The `--live` rig: monitor, webcam, projector→camera latency, calibration review |
+| [collect.yaml](src/projector_distortion/configs/collect.yaml) | Everything `Data.py` reads: session folders, light extraction, capture rig, warp geometry, recording |
 
-These files are where a model setting is changed; none of them has a CLI flag. The
-flags that remain are about *this* run — which data, where the output goes, how much
-of it to process — plus `--device` on `demo.py` and the three training
-hyperparameters on `train.py`. Everything about the models is edited in place:
+No model setting has a CLI flag. What remains on the command line is about *this* run —
+which data, where the output goes, how much to process — so a checkpoint or a threshold
+is edited in place rather than remembered as an argument:
 
 ```yaml
 # projector_distortion/configs/detection.yaml
@@ -262,7 +261,8 @@ detector:
 
 Relative paths inside a config resolve against the project root — except the three
 `train.data` entries, which are globbed as written and so read against the working
-directory.
+directory. Setting-by-setting:
+[COMMANDS.md](COMMANDS.md#settings-that-have-no-flag).
 
 ---
 

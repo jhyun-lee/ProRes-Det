@@ -25,31 +25,14 @@ that just work are in [README.md](README.md); dataset collection is in
 they load and at what confidence — all of it is read from
 `projector_distortion/configs/*.yaml`. Those settings each had a flag once; none of
 them was what actually changed between two runs, and together they made `--help`
-unreadable.
+unreadable. The inference scripts never need the architecture settings anyway: a
+checkpoint carries the architecture it was trained with.
 
-| Setting | Where |
-|---|---|
-| Live rig: monitor, webcam, projector→camera latency | `rig:` in `live.yaml` — monitor and webcam also take `--screen` / `--camera` |
-| Collection rig, session folders, warp geometry | `collect.yaml` — read by `Data.py`, not by these three |
-| Restoration backend | `model.backend` in `restoration.yaml` |
-| Restoration checkpoint | `model.weights` in `restoration.yaml` |
-| What the restorer runs at | `model.input_size` in `restoration.yaml` |
-| Architecture / ablation / capacity | `ablation:` in `restoration.yaml` — see [Ablation](#ablation) |
-| Training epochs, batch, lr, accumulation, loss weights | `train:` in `restoration.yaml` |
-| Detection backend | `detector.backend` in `detection.yaml` — `yolo` · `ssd` · `none`, or any name registered with `@register_detector`. A list runs one per row in `evaluate.py` |
-| Detector checkpoints | `weights.<backend>` in `detection.yaml` |
-| Detector confidence floor | `detector.conf` in `detection.yaml` |
-| Class names | `names:` in `detection.yaml` — a YOLO checkpoint's own names win over the list |
-| Box size gate | `detector.min_width` / `min_height` / `min_area` in `detection.yaml` |
-| Detector inference size | `detector.imgsz` in `detection.yaml` |
-
-The inference scripts never need the architecture settings anyway: a checkpoint carries
-the architecture it was trained with.
+Which setting lives in which file:
+[COMMANDS.md](COMMANDS.md#settings-that-have-no-flag).
 
 The flags that remain are about the run in front of you — which data, where the output
-goes, how much of it to process, and on the live rig which hardware. Full list:
-`python <script>.py --help`. `--device cuda|cpu` is on `demo.py` and `train.py`;
-`evaluate.py` always resolves it (cuda if present).
+goes, how much of it to process, and on the live rig which hardware.
 
 ---
 
