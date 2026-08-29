@@ -1,27 +1,2 @@
 # Auto detect text files and perform LF normalization
 * text=auto
-
-# Kept out of the release tarball, not out of the repository.
-#
-# GitHub builds its source downloads with `git archive`, which honours
-# export-ignore, and Zenodo archives that download. At 405 MB the whole tree is
-# more than the GitHub-to-Zenodo hand-off will carry; dropping these two leaves
-# ~105 MB.
-#
-# What stays is chosen so the archive is still a working artefact rather than
-# just citable source: sample_eval, sample_test and all three checkpoints remain,
-# so `python demo.py` and `python evaluate.py` run from it and reproduce the
-# reference table in the README.
-#
-# What goes is what only the two things a reviewer is least likely to run need:
-#   data/live/                 the projection clips - `--live`, `Data.py record`
-#                              and `make_light` only. README_data already says a
-#                              copy that neither collects nor projects can delete
-#                              them.
-#   SampleData/sample_train/   179 MB, read by `train.py` and nothing else. The
-#                              shipped checkpoint is what the paper reports; the
-#                              training split is for retraining it.
-#
-# `git clone` is unaffected and still carries everything.
-data/live export-ignore
-data/SampleData/sample_train export-ignore
