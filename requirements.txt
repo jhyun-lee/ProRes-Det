@@ -2,7 +2,7 @@
 #
 # On Windows the default PyPI wheel below is CPU-only, and nothing fails - the run is
 # just ~25x slower. For the CUDA build, add requirements-cuda.txt to the same command:
-#   pip install -e ".[all]" -r requirements-cuda.txt
+#   pip install -e . -r requirements-cuda.txt
 torch>=1.13
 torchvision>=0.14
 opencv-python>=4.5
@@ -11,8 +11,8 @@ PyYAML>=5.4
 tqdm>=4.60
 
 # Optional, installed via extras (see setup.py):
-#   pip install -e .[yolo]    ultralytics        --detector yolo
+#   pip install -e .[yolo]    ultralytics (AGPL-3.0)   detector.backend: yolo
 #   pip install -e .[train]   pytorch-msssim pandas matplotlib   train.py
-#   pip install -e .[live]    screeninfo         demo.py --live on non-Windows
+#   pip install -e .[live]    screeninfo               demo.py --live on non-Windows
 #   pip install -e .[test]    pytest
-#   pip install -e .[all]     all of the above
+#   pip install -e .[all]     all of the above (Warning: includes AGPL-3.0 ultralytics)

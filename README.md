@@ -31,17 +31,27 @@ the difference — mAP, PSNR, SSIM.
 Python ≥ 3.9.
 
 ```bash
-git clone <repo> && cd ProRes-Det
+git clone https://github.com/jhyun-lee/ProRes-Det.git
+cd ProRes-Det
 conda create -n prores-det python=3.10 -y && conda activate prores-det
 
-pip install -e ".[all]" -r requirements-cuda.txt    # GPU
-pip install -e ".[all]"                             # CPU only
+# Default installation (SSD backend; permissive dependencies, no Ultralytics)
+pip install -e .                           # Default installation
+pip install -e . -r requirements-cuda.txt  # Windows CUDA PyTorch wheel
+
+# Optional: YOLO11 backend (opts into AGPL-3.0)
+pip install -e ".[yolo]"
+
+# All extras (Warning: installs all dependencies including AGPL-3.0 Ultralytics)
+pip install -e ".[all]" -r requirements-cuda.txt
 ```
 
-Quote the brackets — they are glob characters in zsh.
+Quote the brackets (`".[yolo]"`, `".[all]"`) — they are glob characters in zsh.
 
-`[all]` pulls every extra. Narrower ones exist: `[yolo]` for the `yolo` detector,
-`[train]` for `train.py`, `[live]` for `--live` on non-Windows, `[test]` for pytest.
+> **License Notice**: The default installation (`pip install -e .`) touches only permissive licenses (MIT, BSD, Apache) and runs the BSD-3-Clause `ssd` detector. `ultralytics` (YOLO11) is licensed under **AGPL-3.0** and is installed only when explicitly opting in via `.[yolo]` or `.[all]`. See [THIRD_PARTY.md](THIRD_PARTY.md) for full licensing boundaries.
+
+Narrower extras exist: `[yolo]` for the YOLO detector (AGPL-3.0), `[train]` for `train.py`,
+`[live]` for `--live` on non-Windows, `[test]` for pytest.
 
 Confirm the GPU took:
 
@@ -77,9 +87,9 @@ defaults to its own split:
 
 | Split | Contents | Default for |
 |---|---|---|
-| `sample_train` | 1,000 pairs, 20 scenes, no labels | `train.py` |
-| `sample_eval` | 22 pairs, 10 scenes, 107 boxes | `demo.py`, `evaluate.py` |
-| `sample_test` | 200 pairs, 5 scenes, 53 boxes | held out — pass `--input`/`--gt` to reach it |
+| `sample_train` | 3,000 pairs, 20 scenes, no labels | `train.py` |
+| `sample_eval` | 200 pairs, 10 scenes, 2,140 GT instances | `demo.py`, `evaluate.py` |
+| `sample_test` | 1,000 pairs, 10 captured scenes, 10,468 GT instances | held out — pass `--input`/`--gt` to reach it |
 
 The scenes do not overlap, so a model trained on `sample_train` is scored on frames it has
 never seen. Details and the two label formats: [datasets/README_data.md](datasets/README_data.md).
@@ -145,6 +155,8 @@ than taken on trust. Reproduce with the commands in each caption — no flags be
 split, and no edits except where noted.
 
 ### Detection, before vs after restoration
+
+The reference metrics below were measured on the previous smaller dataset release. They are historical results; rerun evaluation for the current split counts above.
 
 `sample_test` is the headline: it is held out, it is 9× the size of `sample_eval`, and
 no checkpoint here was fitted on it.
@@ -345,7 +357,8 @@ AGPL-3.0.
 
 Upstream: [ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0) and
 [torchvision](https://github.com/pytorch/vision) (BSD-3-Clause). Every other
-dependency is MIT, BSD or Apache; `pip show <package>` lists them.
+dependency is MIT, BSD or Apache; see [THIRD_PARTY.md](THIRD_PARTY.md) for the
+complete component-by-component breakdown and license boundary guarantees.
 
 ---
 

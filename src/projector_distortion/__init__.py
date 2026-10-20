@@ -24,6 +24,7 @@ from .models import (
     BaseRestorer,
     Detection,
     RestorationConfig,
+    PlainCNNConfig,
     build_detector,
     build_restorer,
     detector_names,
@@ -34,7 +35,7 @@ from .models import (
 __all__ = [
     "__version__",
     "BaseRestorer", "BaseDetector", "Detection",
-    "RestorationConfig", "build_restorer", "build_detector",
+    "RestorationConfig", "PlainCNNConfig", "build_restorer", "build_detector",
     "detector_names", "restorer_names", "filter_detections", "CLASS_NAMES",
     "load_config", "resolve_path", "PROJECT_ROOT",
 ]

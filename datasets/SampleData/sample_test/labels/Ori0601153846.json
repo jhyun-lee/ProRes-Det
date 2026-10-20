@@ -1,0 +1,280 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "Orange",
+      "points": [
+        [
+          160.7514450867053,
+          16.127167630057926
+        ],
+        [
+          262.485549132948,
+          107.16763005780345
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "GreenApple",
+      "points": [
+        [
+          514.7976878612717,
+          14.971098265896003
+        ],
+        [
+          616.242774566474,
+          108.3236994219653
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Shark",
+      "points": [
+        [
+          387.34104046242817,
+          238.9595375722545
+        ],
+        [
+          495.7225433526012,
+          341.271676300578
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Elephant",
+      "points": [
+        [
+          269.7109826589595,
+          241.56069364161857
+        ],
+        [
+          369.71098265895955,
+          345.028901734104
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Pear",
+      "points": [
+        [
+          516.2427745664744,
+          241.5606936416187
+        ],
+        [
+          620.2890173410404,
+          346.7630057803468
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Kiwi",
+      "points": [
+        [
+          520.0000000000005,
+          126.24277456647425
+        ],
+        [
+          620.2890173410406,
+          222.77456647398844
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "BlueBerry",
+      "points": [
+        [
+          396.0115606936419,
+          132.02312138728348
+        ],
+        [
+          499.76878612716763,
+          227.10982658959537
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Monkey",
+      "points": [
+        [
+          287.919075144509,
+          16.705202312138965
+        ],
+        [
+          389.3641618497109,
+          108.03468208092495
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Punica",
+      "points": [
+        [
+          155.83815028901728,
+          133.7572254335261
+        ],
+        [
+          256.99421965317913,
+          228.84393063583815
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Watermelon",
+      "points": [
+        [
+          28.092485549132903,
+          127.3988439306359
+        ],
+        [
+          122.89017341040463,
+          218.72832369942196
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Giraffe",
+      "points": [
+        [
+          30.115606936416196,
+          11.791907514450855
+        ],
+        [
+          135.02890173410395,
+          111.21387283236993
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Lemon",
+      "points": [
+        [
+          399.7687861271675,
+          19.884393063583886
+        ],
+        [
+          503.2369942196531,
+          114.10404624277456
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Peach",
+      "points": [
+        [
+          277.80346820809274,
+          131.15606936416208
+        ],
+        [
+          381.56069364161846,
+          226.24277456647397
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Melon",
+      "points": [
+        [
+          149.4797687861274,
+          243.00578034682098
+        ],
+        [
+          249.1907514450867,
+          345.028901734104
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Apple",
+      "points": [
+        [
+          24.62427745664766,
+          236.64739884393083
+        ],
+        [
+          124.33526011560696,
+          338.67052023121386
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "Ori0601153846.jpg",
+  "imageData": null,
+  "imageHeight": 360,
+  "imageWidth": 640
+}

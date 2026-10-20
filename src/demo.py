@@ -5,8 +5,8 @@ Restore projector distortion, then detect objects - in one command.
 
 Offline (default, no hardware):
     python demo.py
-    python demo.py --input data/SampleData/sample_eval --output output --save-every 1
-    python demo.py --input data/SampleData/sample_test # the held-out split
+    python demo.py --input datasets/SampleData/sample_eval --output output --save-every 1
+    python demo.py --input datasets/SampleData/sample_test # the held-out split
 
 Replay a recording (two mp4s in, one out, no hardware):
     python demo.py --video-pair data/recordings/rec_0828144808.mp4
@@ -237,7 +237,7 @@ def _run_offline(args, restorer, detector, rec, box_filter):
     if not input_root or not os.path.isdir(input_root):
         raise SystemExit(
             f"input folder not found: {args.input}\n"
-            f"    expected distorted/ and light/ subfolders; see data/README_data.md")
+            f"    expected distorted/ and light/ subfolders; see datasets/README_data.md")
 
     return run_offline(input_root, restorer, detector, rec,
                        limit=args.limit, detector_name=detector.name, **box_filter)

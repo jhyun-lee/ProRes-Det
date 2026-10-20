@@ -10,8 +10,16 @@ model:
   # Which restoration backend runs. Any name registered with @register_restorer.
   # Swapping this is the whole change - the pipeline, recording and evaluation code
   # never learn which backend they are talking to.
+  
+  # Basic baseline: set backend: plain_cnn, then python src/train.py. After training, point
+  # weights below at that run's restorer_CNN-W32-D5_best.pt before demo/evaluate.
+  
+  # backend: plain_cnn
+  # weights: weights/restorer_CNN_best.pt
+
   backend: naf_se_unet
-  weights: weights/restorer_nafse_unet.pt
+  weights: weights/restorer_unet_best.pt
+
   # Network input, (width, height). Fully convolutional, so this can differ from the
   # 320x180 training patch without retraining. Smaller is faster and costs
   # restoration quality, not detection, down to about 480x270.
@@ -20,6 +28,10 @@ model:
 # Turning one of these off and retraining measures that component's contribution.
 # The run directory and the checkpoint filename get a tag naming what was ablated
 # (e.g. `NoCA-NoSkip3`), so a variant stays identifiable from its path alone.
+plain_cnn:
+  width: 32
+  depth: 5                  # total 3x3 convolutions, including input/output
+
 ablation:
   # NAFSEBlock internals
   use_prenorm: true         # false: drop the pre-LayerNorm of NAFSEBlock
@@ -53,12 +65,17 @@ train:
   # working directory, not the project root. Run train.py from the repo root, or
   # give absolute paths. Clearing all three (null) falls back to --data-root.
   #
-  # This is the training split only. sample_eval and sample_test are held out for
-  # evaluate.py; pointing this at either would score the model on what it fitted.
+  # Only this split updates weights. Validation below selects checkpoints;
+  # sample_test remains reserved for final evaluate.py scoring.
   data:
     distorted: "datasets/SampleData/sample_train/distorted"
     surface: "datasets/SampleData/sample_train/surface"
     light: "datasets/SampleData/sample_train/light"
+
+  validation:
+    root: "datasets/SampleData/sample_eval"
+    gt: null                 # optional external directory containing surface/
+    save_images: 10          # per epoch: -1 all, 0 none, positive = preview count
 
   epochs: 30
   batch_size: 4

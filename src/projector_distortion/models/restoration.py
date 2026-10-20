@@ -7,19 +7,19 @@ A 3-level U-Net of NAFSEBlock (LayerNorm2d -> NAFBlock -> CALayer):
     output (B, 3, H, W) = residual
     restored = (distorted - residual).clamp(-1, 1)
 
-There is no MDTA attention and no depthwise-gated FFN here, so this is NAFNet blocks
+There is no MDTA transformer attention here, so this is NAFNet-style blocks
 plus squeeze-excite channel attention in a U-Net, not Restormer - which is what the
 `naf_se_unet` name says. It is fully convolutional, which is why the 180x320 training
 patch and the 640x360 inference size behave identically.
 
-Checkpoints written before the rename carry `arch: "restormer_like"`. Nothing reads
-that field to rebuild the network - the architecture comes from the embedded `cfg` -
-so an old checkpoint still loads unchanged.
+The plain_cnn baseline uses the same residual interface. Checkpoint `arch` selects
+the network family and `cfg` selects its capacity. The old `restormer_like` tag
+remains an alias for naf_se_unet, so old checkpoints still load unchanged.
 """
 
 import os
 from dataclasses import asdict, dataclass, fields
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 from ..utils.image import bgr_to_tensor, residual_to_bgr, tensor_to_bgr
 from .base import BaseRestorer, register_restorer
+from .plain_cnn import PLAIN_CNN_ARCH_NAME, PlainCNN, PlainCNNConfig
 
 CHECKPOINT_FORMAT = 2
 ARCH_NAME = "naf_se_unet"
@@ -264,18 +265,42 @@ class RestorationNet(nn.Module):
         return self.tanh(self.out(d1))
 
 
-def build_network(cfg: RestorationConfig = None) -> RestorationNet:
-    return RestorationNet(cfg or RestorationConfig())
+def architecture_name(cfg):
+    if isinstance(cfg, PlainCNNConfig):
+        return PLAIN_CNN_ARCH_NAME
+    if isinstance(cfg, RestorationConfig):
+        return ARCH_NAME
+    raise TypeError(f"unsupported restoration config: {type(cfg).__name__}")
+
+
+def network_config(backend=ARCH_NAME, values=None):
+    if backend in (ARCH_NAME, LEGACY_ARCH_NAME):
+        return RestorationConfig.from_dict(values or {})
+    if backend == PLAIN_CNN_ARCH_NAME:
+        return PlainCNNConfig.from_dict(values or {})
+    raise ValueError(f"unsupported trainable restoration backend: {backend}")
+
+
+def config_from_settings(settings):
+    backend = (settings.get("model") or {}).get("backend", ARCH_NAME)
+    block = "plain_cnn" if backend == PLAIN_CNN_ARCH_NAME else "ablation"
+    return network_config(backend, settings.get(block) or {})
+
+
+def build_network(cfg=None) -> nn.Module:
+    cfg = cfg or RestorationConfig()
+    architecture_name(cfg)  # fail early for an incompatible configuration
+    return PlainCNN(cfg) if isinstance(cfg, PlainCNNConfig) else RestorationNet(cfg)
 
 
 def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def save_checkpoint(path, model: nn.Module, cfg: RestorationConfig, **extra):
+def save_checkpoint(path, model: nn.Module, cfg, **extra):
     """Write weights with the config embedded, so loading never has to guess."""
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    blob = {"format": CHECKPOINT_FORMAT, "arch": ARCH_NAME,
+    blob = {"format": CHECKPOINT_FORMAT, "arch": architecture_name(cfg),
             "cfg": cfg.to_dict(), "state_dict": model.state_dict()}
     blob.update(extra)
     torch.save(blob, path)
@@ -310,13 +335,12 @@ def _strip_prefixes(state_dict):
     return state_dict
 
 
-def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
-                    strict=True):
+def load_checkpoint(path, device="cpu", cfg=None, strict=True, expected_arch=None):
     """
     Returns (network, cfg, meta).
 
-    An explicit `cfg` wins; otherwise the config embedded in the checkpoint is used.
-    A bare state_dict (the legacy format) falls back to the defaults.
+    An explicit `cfg` wins within the checkpoint's network family; otherwise its
+    embedded config is used. Raw weights need a config or expected_arch for CNN.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"restoration checkpoint not found: {path}")
@@ -325,14 +349,27 @@ def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
     if isinstance(blob, dict) and "state_dict" in blob:
         state_dict = blob["state_dict"]
         embedded = blob.get("cfg")
-        used = cfg or (RestorationConfig.from_dict(embedded) if embedded
-                       else RestorationConfig())
+        arch = blob.get("arch", ARCH_NAME)
+        arch = ARCH_NAME if arch == LEGACY_ARCH_NAME else arch
+        try:
+            used = cfg or network_config(arch, embedded)
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(f"invalid restoration checkpoint config in {path}: {e}") from e
+        if architecture_name(used) != arch:
+            raise RuntimeError(f"checkpoint backend '{arch}' does not match the supplied config")
         meta = {k: v for k, v in blob.items() if k != "state_dict"}
-        meta["cfg_source"] = "embedded" if embedded else "defaults"
+        meta["cfg_source"] = "explicit" if cfg is not None else (
+            "embedded" if embedded else "defaults")
     else:
         state_dict = blob
-        used = cfg or RestorationConfig()
-        meta = {"format": 1, "arch": ARCH_NAME, "cfg_source": "legacy-raw"}
+        used = cfg or network_config(expected_arch or ARCH_NAME)
+        arch = architecture_name(used)
+        meta = {"format": 1, "arch": arch, "cfg_source": "legacy-raw"}
+
+    if expected_arch is not None and arch != expected_arch:
+        raise RuntimeError(
+            f"checkpoint backend '{arch}' does not match model.backend '{expected_arch}'. "
+            "Use weights trained for the selected backend.")
 
     model = build_network(used).to(device)
     try:
@@ -345,7 +382,7 @@ def load_checkpoint(path, device="cpu", cfg: Optional[RestorationConfig] = None,
     return model, used, meta
 
 
-def _mismatch_help(path, cfg: RestorationConfig, cfg_source: str) -> str:
+def _mismatch_help(path, cfg, cfg_source: str) -> str:
     """
     Turn torch's wall of missing keys into the one thing that fixes it.
 
@@ -355,28 +392,32 @@ def _mismatch_help(path, cfg: RestorationConfig, cfg_source: str) -> str:
     """
     lines = [f"{os.path.basename(str(path))} does not fit the architecture it was "
              f"loaded into (tag {cfg.tag()}, config from {cfg_source})."]
-    if cfg_source in ("legacy-raw", "defaults"):
+    if isinstance(cfg, PlainCNNConfig):
+        lines.append("    Check plain_cnn.width and plain_cnn.depth against the training "
+                     "config; NAF-SE U-Net weights cannot be used for plain_cnn.")
+    elif cfg_source in ("legacy-raw", "defaults"):
         lines.append(
             "    This checkpoint carries no config of its own, so it was rebuilt from\n"
             "    the defaults. If it is an ablated variant, describe it in the\n"
             "    'ablation:' block of projector_distortion/configs/restoration.yaml.")
+    elif cfg_source == "explicit":
+        lines.append("    The explicit config does not match the stored weights. "
+                     "Use the training config or the checkpoint's embedded config.")
     else:
         lines.append("    The embedded config does not match the stored weights, so "
                      "the file is likely corrupt or hand-edited.")
     return "\n".join(lines)
 
 
-@register_restorer(ARCH_NAME)
-class NAFSEUNetRestorer(BaseRestorer):
+class _ResidualRestorer(BaseRestorer):
     """Owns normalisation and the numpy <-> tensor round trip."""
 
-    name = ARCH_NAME
-
-    def __init__(self, weights, device="cpu", cfg: RestorationConfig = None,
+    def __init__(self, weights, device="cpu", cfg=None,
                  input_size=(640, 360), **_):
         self.device = device
         self.input_size = tuple(input_size)
-        self.net, self.cfg, self.meta = load_checkpoint(weights, device=device, cfg=cfg)
+        self.net, self.cfg, self.meta = load_checkpoint(
+            weights, device=device, cfg=cfg, expected_arch=self.name)
         self.net.eval()
         self.weights = weights
         self.params = count_parameters(self.net)
@@ -413,13 +454,22 @@ class NAFSEUNetRestorer(BaseRestorer):
                 "input_size": list(self.input_size), "device": str(self.device)}
 
 
-def build_restorer(kind=ARCH_NAME, weights=None, device="cpu",
-                   cfg: RestorationConfig = None,
+@register_restorer(ARCH_NAME)
+class NAFSEUNetRestorer(_ResidualRestorer):
+    name = ARCH_NAME
+
+
+@register_restorer(PLAIN_CNN_ARCH_NAME)
+class PlainCNNRestorer(_ResidualRestorer):
+    name = PLAIN_CNN_ARCH_NAME
+
+
+def build_restorer(kind=ARCH_NAME, weights=None, device="cpu", cfg=None,
                    input_size=(640, 360)) -> BaseRestorer:
     """
     Instantiate a registered restoration backend, the mirror of `build_detector`.
 
-    `cfg` is this architecture's ablation config; a backend that has no use for it
+    `cfg` is this architecture's config; a backend that has no use for it
     absorbs it through `**_`, exactly as `ssd` does with the yolo-only `imgsz`.
     """
     from .base import get_restorer_class

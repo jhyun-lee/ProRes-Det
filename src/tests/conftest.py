@@ -18,7 +18,7 @@ RESTORER_W = os.path.join(WEIGHTS, "restorer_nafse_unet.pt")
 YOLO_W = os.path.join(WEIGHTS, "detector_yolo11s.pt")
 SSD_W = os.path.join(WEIGHTS, "detector_ssdlite.pth")
 
-# The three splits under data/SampleData. sample_train has no labels/ (training never
+# The three splits under datasets/SampleData. sample_train has no labels/ (training never
 # reads them); sample_eval labels in YOLO txt, sample_test in LabelMe json.
 SAMPLE_DATA = os.path.join(DATA, "SampleData")
 SAMPLE_TRAIN = os.path.join(SAMPLE_DATA, "sample_train")

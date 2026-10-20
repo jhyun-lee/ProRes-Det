@@ -1,7 +1,7 @@
 """
 Sample discovery, ground truth loading, and the training dataset.
 
-Filenames tie the views of one moment together (see data/README_data.md):
+Filenames tie the views of one moment together (see datasets/README_data.md):
 
     distorted  distorted_<surfaceId>_<lightId>.jpg
     light      light_<lightId>.jpg
@@ -15,7 +15,7 @@ auto-detected.
 Sessions collected before the rename used pro/ beam/ clean/ and the prefixes
 `projected_` / `output_video_` / `Ori`. Those are still recognised on read so an
 existing dataset keeps working; nothing writes them any more - the bundled
-data/SampleData/sample_train and sample_test still carry that spelling, while
+datasets/SampleData/sample_train and sample_test still carry that spelling, while
 sample_eval carries the current one.
 """
 

@@ -4,52 +4,59 @@
 Fine-tune the restoration network on projector-distortion triplets.
 
     python train.py --epochs 30
-    python train.py --data-root data/SampleData/sample_train --epochs 5 --batch-size 2
-    python train.py --data-root /path/to/full/dataset --epochs 30
+    python train.py --data-root datasets/SampleData/sample_train --epochs 5
+    python train.py --data-root /path/to/train --val-root /path/to/validation
 
-The bundled training split is data/SampleData/sample_train (1,000 pairs over 20
-surfaces). sample_eval and sample_test are held out for evaluate.py and carry the
-detection labels; nothing here reads them.
+Only the training split updates weights. After every epoch, the complete validation
+split is restored at model.input_size without random crops or gradients. The best
+checkpoint maximizes mean validation PSNR; sample_test is reserved for final scoring.
+Validation uses surface targets, not detection labels. Its metrics and restoration
+previews are saved under the run's validation/ directory.
 
-The architecture comes from the `ablation:` block of configs/restoration.yaml, not
-from flags - edit it there to ablate a component (`use_ca: false`) or change the
-capacity, then run this. The run directory and the checkpoint filename are tagged
-with what was ablated, so a variant stays identifiable from its path.
+The architecture comes from model.backend in configs/restoration.yaml: naf_se_unet
+uses the ablation block; plain_cnn uses the plain_cnn block. A resumed checkpoint
+carries its own architecture and config. Run directories identify the variant.
 
 Loss: L1 + VGG perceptual + (1 - SSIM) + high-frequency Haar, weights from
 configs/restoration.yaml (tuned by an Optuna sweep on this dataset).
 
 The network predicts the residual, so the supervised quantity is
 `(distorted - residual).clamp(-1, 1)` against the surface image. Checkpoints embed
-their RestorationConfig, so demo.py reconstructs the right architecture with no extra
+their architecture config, so demo.py reconstructs the right architecture with no extra
 flags.
 
 Needs the training extra:  pip install -e .[train]
 """
 
 import argparse
+import csv
 import gc
+import math
 import os
 import sys
 from datetime import datetime
 
 import numpy as np
+import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
-from torch.utils.data import DataLoader  # noqa: E402
+from torch.utils.data import DataLoader, Dataset  # noqa: E402
 
-from projector_distortion.cli import SAMPLE_TRAIN, resolve_device  # noqa: E402
+from projector_distortion.cli import SAMPLE_EVAL, SAMPLE_TRAIN, resolve_device  # noqa: E402
 from projector_distortion.config import load_config, pick, resolve_path  # noqa: E402
 from projector_distortion.data import (  # noqa: E402
-    RESEARCH_DIRS, TripletPatchDataset, index_triplets,
+    RESEARCH_DIRS, TripletPatchDataset, index_triplets, surface_id,
 )
 from projector_distortion.models.restoration import (  # noqa: E402
-    ARCH_NAME, RestorationConfig, build_network, count_parameters, load_checkpoint,
-    save_checkpoint,
+    architecture_name, config_from_settings, build_network, count_parameters,
+    load_checkpoint, save_checkpoint,
+)
+from projector_distortion.utils.image import (  # noqa: E402
+    bgr_to_tensor, psnr, read_bgr, resize, ssim, tensor_to_bgr,
 )
 
 
@@ -130,6 +137,128 @@ def _ssim_module(device):
     return pytorch_msssim.SSIM(data_range=2.0, size_average=True, channel=3).to(device)
 
 
+class ValidationDataset(Dataset):
+    """Full, deterministic images; training's random patch sampler is not used."""
+
+    def __init__(self, triplets, size):
+        self.triplets = list(triplets)
+        self.size = tuple(size)  # width, height
+
+    def __len__(self):
+        return len(self.triplets)
+
+    def __getitem__(self, index):
+        distorted, surface, light = self.triplets[index]
+
+        def image(path):
+            return bgr_to_tensor(read_bgr(path), size=self.size).squeeze(0)
+
+        name = os.path.splitext(os.path.basename(distorted))[0]
+        reference = resize(read_bgr(surface), self.size)
+        target = bgr_to_tensor(reference).squeeze(0)
+        return image(distorted), image(light), target, name, reference
+
+
+def _check_scene_separation(train_triplets, val_triplets):
+    train_ids = {surface_id(t[0]) for t in train_triplets}
+    val_ids = {surface_id(t[0]) for t in val_triplets}
+    overlap = sorted(train_ids & val_ids)
+    if overlap:
+        raise SystemExit("training and validation share surfaceId(s): "
+                         + ", ".join(overlap))
+
+
+def _preview_names(triplets, limit):
+    """Prefer one example per scene before filling the remaining preview slots."""
+    if limit < -1:
+        raise ValueError("validation save_images must be -1, 0, or a positive integer")
+    names = [os.path.splitext(os.path.basename(t[0]))[0] for t in triplets]
+    if limit == -1:
+        return set(names)
+    selected, seen = [], set()
+    for name in names:
+        sid = surface_id(name)
+        if sid not in seen:
+            selected.append(name)
+            seen.add(sid)
+    selected.extend(name for name in names if name not in selected)
+    return set(selected[:limit])
+
+
+def _loss_parts(restored, surface, l1, percep, wavelet, ssim_fn):
+    return {"l1": l1(restored, surface),
+            "perceptual": percep(restored, surface),
+            "ssim": 1 - ssim_fn(restored, surface),
+            "wavelet": wavelet(restored, surface)}
+
+
+def _save_validation_preview(directory, name, distorted, restored, surface):
+    restored_dir = os.path.join(directory, "restored")
+    comparison_dir = os.path.join(directory, "comparison")
+    os.makedirs(restored_dir, exist_ok=True)
+    os.makedirs(comparison_dir, exist_ok=True)
+    panel = np.concatenate([distorted, restored, surface], axis=1)
+    width = restored.shape[1]
+    for offset, label in enumerate(("distorted", "restored", "surface")):
+        cv2.putText(panel, label, (offset * width + 5, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(panel, label, (offset * width + 5, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    for path, image in ((os.path.join(restored_dir, name + ".png"), restored),
+                        (os.path.join(comparison_dir, name + ".jpg"), panel)):
+        if not cv2.imwrite(path, image):
+            raise OSError(f"could not save validation image: {path}")
+
+
+@torch.inference_mode()
+def validate_epoch(net, loader, device, weights, l1, percep, wavelet, ssim_fn,
+                   directory, preview_names):
+    """Mean per-image metrics, no weight/statistics updates, full validation set."""
+    was_training = net.training
+    rows = []
+    net.eval()
+    os.makedirs(directory, exist_ok=True)
+    try:
+        for distorted, light, surface, names, references in loader:
+            # Validation uses batch size one so every image has equal weight.
+            distorted = distorted.to(device)
+            light = light.to(device)
+            surface = surface.to(device)
+            residual = net(torch.cat([distorted, light], dim=1))
+            if not torch.isfinite(residual).all():
+                raise RuntimeError(f"non-finite validation prediction: {names[0]}")
+            restored = (distorted - residual).clamp(-1, 1)
+            parts = _loss_parts(restored, surface, l1, percep, wavelet, ssim_fn)
+            total = sum(weights.get(k, 0.0) * v for k, v in parts.items())
+            if not torch.isfinite(total):
+                raise RuntimeError(f"non-finite validation loss: {names[0]}")
+            # Match evaluate.py's RGB->uint8 BGR conversion and image metrics.
+            # Keep the original uint8 target: a tensor round-trip can truncate a
+            # pixel by one and would disagree with evaluate.py's ground truth.
+            reference = references[0].numpy()
+            result = tensor_to_bgr(restored)
+            row = {"name_id": names[0], "surface_id": surface_id(names[0]),
+                   "val_loss": float(total),
+                   **{f"val_{k}_loss": float(v) for k, v in parts.items()},
+                   "val_psnr": psnr(reference, result),
+                   "val_ssim": ssim(reference, result)}
+            rows.append(row)
+            if names[0] in preview_names:
+                _save_validation_preview(directory, names[0],
+                                         tensor_to_bgr(distorted), result, reference)
+    finally:
+        net.train(was_training)
+    if not rows:
+        raise RuntimeError("validation dataset is empty")
+    with open(os.path.join(directory, "metrics.csv"), "w", newline="",
+              encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return {key: float(np.mean([row[key] for row in rows]))
+            for key in rows[0] if key.startswith("val_")}
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -140,6 +269,12 @@ def build_parser():
                         f"this overrides train.data")
     p.add_argument("--gt", default=None,
                    help="where surface/ lives when it is not under --data-root")
+    p.add_argument("--val-root", default=None,
+                   help="complete validation split (default: train.validation.root)")
+    p.add_argument("--val-gt", default=None,
+                   help="validation surface targets when stored outside --val-root")
+    p.add_argument("--val-save-images", type=int, default=None,
+                   help="previews per epoch: -1 all, 0 none; default from validation config")
     p.add_argument("--out", default="runs", help="parent folder for run directories")
     p.add_argument("--epochs", type=int, default=None,
                    help="default: train.epochs in configs/restoration.yaml")
@@ -210,11 +345,16 @@ def main(argv=None):
     workers = 4 if batch_size <= 4 else 8
     weights = {k: float(v) for k, v in (tcfg.get("loss") or {}).items()}
     weights.setdefault("l1", 1.0)
+    vcfg = tcfg.get("validation") or {}
+    val_root = resolve_path(args.val_root or vcfg.get("root") or SAMPLE_EVAL)
+    val_gt = resolve_path(args.val_gt or vcfg.get("gt"))
+    val_save_images = int(pick(args.val_save_images, vcfg, "save_images", default=10))
+    if val_save_images < -1:
+        raise SystemExit("--val-save-images must be -1, 0, or a positive integer")
 
     # A resumed checkpoint carries its own architecture, and that wins over the
     # `ablation:` block - continuing a run must not silently change the network.
     net = None
-    cfg = RestorationConfig.from_dict(rest_cfg.get("ablation") or {})
     if args.resume:
         # A mistyped --resume is a typo, not a bug, and every other entry point
         # answers one with a line rather than a traceback.
@@ -223,6 +363,11 @@ def main(argv=None):
         except (FileNotFoundError, RuntimeError) as e:
             raise SystemExit(f"could not resume from {args.resume}\n    {e}") from e
         print(f"resuming from {args.resume} (cfg via {meta['cfg_source']})")
+    else:
+        try:
+            cfg = config_from_settings(rest_cfg)
+        except (ValueError, TypeError) as e:
+            raise SystemExit(f"invalid restoration model config: {e}") from e
 
     tag = cfg.tag()
     run = os.path.join(resolve_path(args.out) or args.out,
@@ -230,7 +375,7 @@ def main(argv=None):
     os.makedirs(run, exist_ok=True)
 
     print("=" * 74)
-    print(f"train {ARCH_NAME} [{tag}] | {epochs} epochs | device={device}")
+    print(f"train {architecture_name(cfg)} [{tag}] | {epochs} epochs | device={device}")
     print(f"    {cfg.describe()}")
     print(f"    batch {batch_size} x accum {accum} | lr {lr} | workers {workers}")
     print(f"    loss weights {weights}")
@@ -257,6 +402,17 @@ def main(argv=None):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
                         num_workers=workers, pin_memory=(device == "cuda"))
 
+    val_surface = _surface_root(val_root, val_gt)
+    val_triplets = index_triplets(val_root, surface_root=val_surface)
+    _check_scene_separation(triplets, val_triplets)
+    val_size = tuple(pick(None, rest_cfg, "model", "input_size", default=[640, 360]))
+    val_dataset = ValidationDataset(val_triplets, val_size)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0)
+    previews = _preview_names(val_triplets, val_save_images)
+    print(f"    validation: {len(val_triplets)} images at {val_size[0]}x{val_size[1]}"
+          f" from {val_root}; {len(previews)} previews/epoch")
+    print("    best checkpoint: highest mean validation PSNR (dB)")
+
     if net is None:
         net = build_network(cfg).to(device)
     print(f"trainable params: {count_parameters(net):,}")
@@ -273,7 +429,7 @@ def main(argv=None):
     # nothing in a run needs it turned off selectively.
     use_amp = device == "cuda"
     scaler = torch.amp.GradScaler(device) if use_amp else None
-    history, best = [], float("inf")
+    history, best, best_epoch = [], -float("inf"), None
 
     for epoch in range(epochs):
         net.train()
@@ -298,12 +454,7 @@ def main(argv=None):
             with ctx:
                 residual = net(torch.cat([distorted, light], dim=1))
                 restored = (distorted - residual).clamp(-1, 1)
-                parts = {
-                    "l1": l1(restored, surface),
-                    "perceptual": percep(restored, surface),
-                    "ssim": 1 - ssim_fn(restored, surface),
-                    "wavelet": wavelet(restored, surface),
-                }
+                parts = _loss_parts(restored, surface, l1, percep, wavelet, ssim_fn)
                 total = sum(weights.get(k, 0.0) * v for k, v in parts.items())
 
             scaled = total / accum
@@ -329,18 +480,31 @@ def main(argv=None):
 
         row = {"epoch": epoch + 1, **{k: round(float(np.mean(v)), 5)
                                       for k, v in ep.items()}}
+        validation = validate_epoch(
+            net, val_loader, device, weights, l1, percep, wavelet, ssim_fn,
+            os.path.join(run, "validation", f"epoch_{epoch + 1:03d}"), previews)
+        row.update({k: round(v, 5) for k, v in validation.items()})
         history.append(row)
         print("  " + "  ".join(f"{k}={v}" for k, v in row.items()))
 
+        score = validation["val_psnr"]
+        if math.isnan(score):
+            raise RuntimeError("validation PSNR is NaN; cannot select a checkpoint")
+        improved = best_epoch is None or score > best
+        if improved:
+            best, best_epoch = score, epoch + 1
         extra = dict(epoch=epoch + 1, epochs=epochs, loss=row["total"],
                      loss_weights=weights, batch_size=batch_size, accum_steps=accum,
-                     lr=lr, data_root=data_root, triplets=len(triplets))
+                     lr=lr, data_root=data_root, triplets=len(triplets), seed=SEED,
+                     validation_root=val_root, validation_surface=val_surface,
+                     validation_triplets=len(val_triplets), validation_size=val_size,
+                     selection_metric="val_psnr", selection_mode="max",
+                     best_val_psnr=best, best_epoch=best_epoch, **validation)
         save_checkpoint(os.path.join(run, f"epoch_{epoch + 1}.pt"), net, cfg, **extra)
-        if row["total"] < best:
-            best = row["total"]
+        if improved:
             save_checkpoint(os.path.join(run, f"restorer_{tag}_best.pt"), net, cfg,
                             **extra)
-            print(f"  new best: {best:.5f}")
+            print(f"  new best validation PSNR: {best:.5f} dB (epoch {best_epoch})")
 
         _write_log(history, run)
         sched.step()
@@ -348,15 +512,15 @@ def main(argv=None):
         if device == "cuda":
             torch.cuda.empty_cache()
 
-    print(f"\ndone. best loss {best:.5f}\n  -> {run}")
-    print(f"  use it:  set model.weights in configs/restoration.yaml to\n"
+    print(f"\ndone. best validation PSNR {best:.5f} dB at epoch {best_epoch}\n  -> {run}")
+    print(f"  use it:  set model.backend to {architecture_name(cfg)} and "
+          f"model.weights in configs/restoration.yaml to\n"
           f"           {os.path.join(run, f'restorer_{tag}_best.pt')}\n"
           f"           then run: python demo.py")
     return 0
 
 
 def _write_log(history, run):
-    import csv
     with open(os.path.join(run, "loss_log.csv"), "w", newline="",
               encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(history[0]))
@@ -366,9 +530,11 @@ def _write_log(history, run):
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 5))
+        fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(17, 5))
         xs = [r["epoch"] for r in history]
         a1.plot(xs, [r["total"] for r in history], label="total", linewidth=2)
+        a1.plot(xs, [r["val_loss"] for r in history], label="validation total",
+                linewidth=2)
         for k in ("l1", "perceptual", "ssim"):
             a1.plot(xs, [r[k] for r in history], label=k, linestyle=":")
         a1.set_xlabel("epoch")
@@ -382,6 +548,16 @@ def _write_log(history, run):
         a2.legend()
         a2.grid(True)
         a2.set_title("auxiliary")
+        a3.plot(xs, [r["val_psnr"] for r in history], label="validation PSNR",
+                color="tab:blue")
+        a3.set_xlabel("epoch")
+        a3.set_ylabel("PSNR (dB)", color="tab:blue")
+        quality = a3.twinx()
+        quality.plot(xs, [r["val_ssim"] for r in history], label="validation SSIM",
+                     color="tab:orange")
+        quality.set_ylabel("SSIM", color="tab:orange")
+        a3.grid(True)
+        a3.set_title("validation quality (best = maximum PSNR)")
         fig.tight_layout()
         fig.savefig(os.path.join(run, "loss_plots.png"))
         plt.close(fig)

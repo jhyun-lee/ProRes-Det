@@ -26,7 +26,7 @@ Run everything from the repo root.
 
 | Command | Needs a rig | Does |
 |---|:---:|---|
-| `python src/demo.py` | — | Restore + detect the 22 bundled eval pairs |
+| `python src/demo.py` | — | Restore + detect the 200 bundled eval pairs |
 | `python src/demo.py --video-pair <mp4>` | — | Replay a recording into a restored video |
 | `python src/demo.py --live` | **yes** | Drive the webcam + projector live |
 | `python src/evaluate.py` | — | Score before vs after: mAP, PSNR, SSIM |
@@ -172,6 +172,9 @@ Scoring several detectors in one report is a config edit, not a flag — put a l
 |---|---|---|
 | `--data-root <dir>` | `train.data` in `restoration.yaml` | Training pairs |
 | `--gt <dir>` | under `--data-root` | Where `surface/` lives when it is not under `--data-root` |
+| `--val-root <dir>` | `train.validation.root` | Full validation split, restored after every epoch |
+| `--val-gt <dir>` | under `--val-root` | Separate validation directory containing `surface/` |
+| `--val-save-images N` | `10` | Previews per epoch; `-1` all, `0` none. Metrics always cover all validation pairs |
 | `--out <dir>` | `runs` | Where checkpoints go |
 | `--epochs N` | `30` | From `train.epochs` |
 | `--batch-size N` | `4` | From `train.batch_size` |
@@ -186,7 +189,13 @@ python src/train.py --epochs 60 --batch-size 8
 python src/train.py --sample 200 --epochs 2          # a quick smoke run
 python src/train.py --data-root datasets/Create_Data/warp_0813
 python src/train.py --resume runs/<tag>/best.pt
+python src/train.py --data-root datasets/SampleData/sample_train --val-root datasets/SampleData/sample_eval
 ```
+
+Only training pairs update weights. The best checkpoint maximizes mean validation
+PSNR at `model.input_size`; `sample_test` is reserved for final evaluation. Validation
+loss, PSNR, SSIM, and per-image metrics are logged every epoch. Training and validation
+surface IDs must be disjoint.
 
 The architecture is **not** a flag. Ablations are the `ablation:` block in
 `restoration.yaml`; the run directory and checkpoint name pick up a tag naming what was

@@ -94,7 +94,7 @@ def test_missing_label_file_is_not_an_error():
     assert load_labels("no/such.json", 100, 100) == []
 
 
-# --- the three splits under data/SampleData -----------------------------------
+# --- the three splits under datasets/SampleData -----------------------------------
 
 @needs_train_split
 @needs_test_split

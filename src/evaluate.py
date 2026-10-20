@@ -3,10 +3,10 @@
 """
 Score detection and restoration before vs after, against a labelled split.
 
-    python evaluate.py                                 # data/SampleData/sample_eval
+    python evaluate.py                                 # datasets/SampleData/sample_eval
     python evaluate.py --iou 0.75 --output output/eval
-    python evaluate.py --input data/SampleData/sample_test \
-                       --gt    data/SampleData/sample_test   # the held-out split
+    python evaluate.py --input datasets/SampleData/sample_test \
+                       --gt    datasets/SampleData/sample_test   # the held-out split
 
 Which detector is scored comes from `detector.backend` in configs/detection.yaml,
 along with its checkpoint and confidence floor. Name several to get one row per
@@ -15,8 +15,8 @@ backend in the same report:
     detector:
       backend: [yolo, ssd]
 
-Both labelled splits live under data/SampleData: sample_eval (22 pairs, YOLO txt
-labels) is the default, sample_test (200 pairs, LabelMe json labels) is held out.
+Both labelled splits live under datasets/SampleData: sample_eval (200 pairs, YOLO txt
+labels) is the default, sample_test (1,000 pairs, LabelMe json labels) is held out.
 Either format is read directly, so --gt only ever needs the split root.
 
 Reports, for the distorted image and the restored one:

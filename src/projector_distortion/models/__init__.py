@@ -30,6 +30,8 @@ from .detection import (
 from .restoration import (
     TOGGLES,
     NAFSEUNetRestorer,
+    PlainCNNRestorer,
+    PlainCNNConfig,
     RestorationConfig,
     build_network,
     build_restorer,
@@ -42,7 +44,7 @@ __all__ = [
     "BaseRestorer", "BaseDetector", "Detection", "NullDetector",
     "register_detector", "detector_names", "get_detector_class",
     "register_restorer", "restorer_names", "get_restorer_class",
-    "RestorationConfig", "NAFSEUNetRestorer", "TOGGLES",
+    "RestorationConfig", "NAFSEUNetRestorer", "PlainCNNConfig", "PlainCNNRestorer", "TOGGLES",
     "build_network", "build_restorer", "save_checkpoint", "load_checkpoint",
     "count_parameters",
     "CLASS_NAMES", "YoloDetector", "SsdDetector", "build_detector",

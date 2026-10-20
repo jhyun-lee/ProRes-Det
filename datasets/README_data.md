@@ -1,4 +1,4 @@
-# data/
+# datasets/
 
 Everything about the dataset: what ships, how filenames tie the views together, the label
 format, and the tools that build more of it.
@@ -24,7 +24,7 @@ A dataset that runs out of the box, split three ways under `SampleData/`. It is 
 git, so it is there right after a clone.
 
 ```
-data/
+datasets/
 ├── check.py                list the displays, preview the webcam
 ├── make_light.py           video -> the light frames a projector will throw
 ├── capture.py              projector + webcam -> raw captures
@@ -32,20 +32,20 @@ data/
 ├── record.py               project a clip and record the camera's view (no models)
 ├── common.py               collect.yaml access, session folders, shared helpers
 ├── SampleData/             the dataset, split for train / validation / test
-│   ├── sample_train/       what train.py fits on          180 MiB
-│   │   ├── distorted/  1,000 files, 640×360
-│   │   ├── light/        990 files, 1280×720 · 854×480 · 856×480
+│   ├── sample_train/       what train.py fits on
+│   │   ├── distorted/  3,000 files, 640×360
+│   │   ├── light/      3,000 files, unique illumination images
 │   │   └── surface/       20 files, 640×360     — no labels/, training needs none
-│   ├── sample_eval/        what demo.py and evaluate.py default to   4.2 MiB
-│   │   ├── distorted/     22 files, 640×360
-│   │   ├── light/         22 files, 1280×720 and 854×480
+│   ├── sample_eval/        what demo.py and evaluate.py default to
+│   │   ├── distorted/    200 files, 640×360
+│   │   ├── light/        200 files, varying source sizes
 │   │   ├── surface/       10 files, 640×360
 │   │   └── labels/        10 files, YOLO txt, 107 boxes
-│   ├── sample_test/        held out; only evaluate.py --input reaches it   44 MiB
-│   │   ├── distorted/    200 files, 640×360
-│   │   ├── light/        198 files, 854×480
-│   │   ├── surface/        5 files, 640×360
-│   │   └── labels/         7 files, LabelMe json, 53 boxes over those 5 scenes
+│   ├── sample_test/        held out; only evaluate.py --input reaches it
+│   │   ├── distorted/  1,000 files, 640×360
+│   │   ├── light/      1,000 files, unique illumination images
+│   │   ├── surface/       15 files, 10 scenes with captured pairs
+│   │   └── labels/        15 files, LabelMe JSON, 10,468 GT instances over captured pairs
 ├── live/                   the projection sources, split by role       121 MiB
 │   ├── train_light_1.mp4   what `Data.py make_light` turns into training light frames
 │   │                       4,262 frames @30fps = 2.4 min, 854×480, 15 MiB
@@ -90,7 +90,7 @@ Keeping them apart is what makes the held-out split honest: a set collected with
 `Data.py` shares no projected frame with `test_light.mp4`, so a checkpoint fitted on it
 has never seen the light it is scored against. `--src` and `--clip` override either side.
 
-`data/` is 349 MiB tracked, and 121 MiB of that is `live/`. The clips are only needed to
+The `live/` clips are only needed to
 *collect* or to run `--live` — the frames they produce already sit in `SampleData/*/light/`,
 so training and evaluation run without them. Delete them if you need neither.
 
@@ -103,9 +103,9 @@ The scenes do not overlap. No `surfaceId` in `sample_train` appears in `sample_e
 
 | Split | Pairs | Scenes | Labels | Read by |
 |---|---|---|---|---|
-| `sample_train` | 1,000 (994 pair a light) | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../src/projector_distortion/configs/restoration.yaml) |
-| `sample_eval` | 22 | 10 | YOLO txt, 107 boxes | `demo.py` and `evaluate.py` — the default for both |
-| `sample_test` | 200 | 5 | LabelMe json, 53 boxes | nothing by default; pass `--input`/`--gt` |
+| `sample_train` | 3,000 | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../src/projector_distortion/configs/restoration.yaml) |
+| `sample_eval` | 200 | 10 | YOLO txt, 2,140 GT instances | `demo.py` and `evaluate.py` — the default for both |
+| `sample_test` | 1,000 | 10 captured (15 surfaces) | LabelMe JSON, 10,468 GT instances | nothing by default; pass `--input`/`--gt` |
 
 ```bash
 python src/train.py                                          # sample_train
@@ -114,11 +114,21 @@ python src/evaluate.py --input datasets/SampleData/sample_test \
                    --gt    datasets/SampleData/sample_test   # sample_test
 ```
 
-Two notes on the counts. Six `sample_train` captures reference a light frame the split does
-not carry; they are skipped with a warning and 994 triplets remain. `sample_test/labels/`
-holds two extra annotations (`Ori0428095917`, `Ori0531135441`) whose scenes have no
-`surface`/`distorted` in the split — unmatched labels are simply never loaded, which is why
-the box count is 53 and not 80.
+Each split has exactly one distorted image per light image: 3,000 train, 200 eval
+and 1,000 test pairs. The source is AWD_Net/0_ImageData. Distinct light images
+were selected first; exactly one matching distorted capture was retained per light.
+Light IDs, SHA-256 file hashes and decoded-pixel hashes are unique across all
+three splits. Selection uses seed 42, balances scenes subject to source availability,
+and samples video time bins and illumination variants. Different original video
+frames are preferred; distinct brightness/inversion variants may share a video
+frame number. No light image is duplicated to increase the file count.
+
+All surface images and annotations are preserved. The test split retains 15
+annotated surfaces, of which 10 have captured pairs. The eval split has 107
+distinct annotated boxes; the test split has 162 across its 15 surfaces
+(102 across its 10 captured scenes). GT instances repeat the scene annotation
+for each retained captured pair. Rebuilding changes training and evaluation
+samples: train and evaluate the models again for results on this release.
 
 `sample_train` and `sample_test` were collected before the filename rename, so they carry
 the `projected_` / `output_video_` / `Ori` spelling; `sample_eval` carries the current
@@ -151,8 +161,9 @@ distorted_0409001429_0404023332_294_75.jpg
 - No `_` in `surfaceId`. Everything up to the first `_` is taken as the surfaceId.
 - `lightId` may contain `_`. Above it is `0404023332_294_75`.
 - One `surface` backing several `distorted` captures is normal. In `sample_eval` 10 surface
-  images back 22 `distorted` files, 1–3 each; in `sample_test` 5 back 200.
-- `light` is 1:1 with `distorted`.
+  images back 200 `distorted` files; in `sample_test` 10 back 1,000.
+- In the released splits, each light image is used by exactly one distorted capture.
+  The loader also supports shared-frame collections outside these splits.
 - Recognised extensions: `.jpg` `.jpeg` `.png` `.bmp`.
 - A `distorted` with no matching `light` is skipped with a warning. The run does not fail.
 - `surface` and `label` are optional. A missing `surface` only drops PSNR/SSIM, and

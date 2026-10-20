@@ -1,0 +1,82 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "Melon",
+      "points": [
+        [
+          133.58381502890182,
+          50.231213872832484
+        ],
+        [
+          227.22543352601156,
+          136.9364161849711
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "GreenApple",
+      "points": [
+        [
+          398.03468208092477,
+          54.566473988439355
+        ],
+        [
+          492.2543352601156,
+          140.6936416184971
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Snake",
+      "points": [
+        [
+          391.0982658959541,
+          246.47398843930645
+        ],
+        [
+          485.60693641618525,
+          329.99999999999994
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Watermelon",
+      "points": [
+        [
+          137.63005780346816,
+          221.0404624277457
+        ],
+        [
+          228.38150289017346,
+          316.12716763005784
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "Ori0601152853.jpg",
+  "imageData": null,
+  "imageHeight": 360,
+  "imageWidth": 640
+}

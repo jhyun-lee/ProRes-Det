@@ -9,6 +9,7 @@ that just work are in [README.md](README.md); dataset collection is in
 [datasets/README_data.md](datasets/README_data.md).
 
 - [What the config files own](#what-the-config-files-own)
+- [Restoration models](#restoration-models)
 - [`demo.py` — restore → detect](#demopy--restore--detect)
 - [`demo.py --video-pair` — replay a recording](#demopy---video-pair--replay-a-recording)
 - [`demo.py --live` — webcam + projector](#demopy---live--webcam--projector)
@@ -33,6 +34,65 @@ Which setting lives in which file:
 
 The flags that remain are about the run in front of you — which data, where the output
 goes, how much of it to process, and on the live rig which hardware.
+
+---
+
+## Restoration models
+
+Both bundled models take `cat([distorted, light])`, normalized RGB tensors of shape
+`B x 6 x H x W`, and predict a `B x 3 x H x W` residual. The common wrapper computes
+`restored = clamp(distorted - residual, -1, 1)`. Training losses, validation,
+image conversion, the detector and evaluation all use this same contract.
+
+| Backend | Structure at default capacity | Trainable parameters |
+|---|---|---:|
+| `naf_se_unet` | Three U-Net down/up stages with NAF-style blocks and squeeze/excite channel attention | 4,184,259 |
+| `plain_cnn` | Five padded 3x3 convolutions, ReLU hidden layers, Tanh output | 30,371 |
+
+The existing U-Net starts with a 6-to-48-channel stem. Its encoders have 2, 2 and 3
+NAFSEBlocks at 48, 96 and 192 channels, followed by 2 bottleneck blocks at 384
+channels. Stride-2 convolutions downsample three times. Transposed convolutions
+upsample to 192, 96 and 48 channels; each stage concatenates its encoder skip,
+reduces channels through a 1x1 convolution, and applies 2 decoder blocks. The output
+head is `48 -> 24 -> 3` followed by Tanh. Each NAFSEBlock applies pre-LayerNorm,
+a NAFBlock with depthwise convolution, multiplicative SimpleGate and learnable
+residual scales, an outer residual addition, then channel attention. This is a
+NAF-style U-Net; the legacy checkpoint tag `restormer_like` remains loadable.
+
+The basic CNN is `6 -> 32 -> 32 -> 32 -> 32 -> 3`: all convolutions use stride 1
+and padding 1, with ReLU after the first four and Tanh after the last. It has no
+normalization, attention, downsampling or encoder/decoder skips. Its default
+receptive field is 11x11, so it is a deliberately small local baseline. Fewer
+parameters alone do not establish its runtime or restoration quality.
+
+To train the baseline, edit `src/projector_distortion/configs/restoration.yaml`:
+
+```yaml
+model:
+  backend: plain_cnn
+  # Keep the existing input_size: [640, 360].
+plain_cnn:
+  width: 32
+  depth: 5
+```
+
+Then run `python src/train.py` from the repository root. `model.weights` is not loaded
+for fresh training; `--resume` explicitly loads a checkpoint and its architecture.
+The same `SampleData/sample_train` and `SampleData/sample_eval` paths and loss
+weights apply to both models. Every epoch validates the full eval split; maximum
+mean validation PSNR selects `restorer_CNN-W32-D5_best.pt`. The test split remains
+for final evaluation.
+
+After training, keep `model.backend: plain_cnn` and set `model.weights` to that
+run's best checkpoint. Run the usual `python src/demo.py` or `python src/evaluate.py`
+command. The loader
+checks that the selected backend matches the checkpoint; existing NAF weights
+cannot initialize the CNN. CNN checkpoints embed their architecture, width and
+depth. A default YAML block lets embedded capacity take precedence; an explicit
+nondefault block overrides capacity and must match the weights, as for NAF.
+
+The default backend remains `naf_se_unet`. Adding the CNN implementation does not
+provide a trained CNN checkpoint or measured baseline detection results.
 
 ---
 
@@ -393,9 +453,11 @@ Resolution order:
 --data-root   >   train.data   >   datasets/SampleData/sample_train
 ```
 
-`train.data` ships pointed at `sample_train`, the only split with no labels — training
-never needs them. `sample_eval` and `sample_test` are held out for `evaluate.py`; pointing
-`train.data` at either would score the model on what it fitted.
+`train.data` points at `datasets/SampleData/sample_train` (3,000 pairs).
+Only this split updates model weights. Every epoch validates on the 200 pairs in
+`datasets/SampleData/sample_eval`, without gradients or random crops. Validation
+needs surface targets, not detection labels. `sample_test` stays separate for final
+evaluation after model selection.
 
 `--data-root` names one folder holding all three roles and wins outright, so a session
 built by `Data.py` needs nothing else — point it at the `warp_<MMDD>/` folder. Leave it
@@ -420,13 +482,59 @@ A `distorted` with no matching `surface` or `light` is counted and skipped, not 
 prints how many went each way.
 
 ```
-data: 994 triplets of 1,000 distorted image(s) from distorted=datasets/SampleData/sample_train/distorted
-      skipped 6 without a light, 0 without a surface
+data: 3,000 triplets of 3,000 distorted image(s) from distorted=datasets/SampleData/sample_train/distorted
+      skipped 0 without a light, 0 without a surface
 ```
 
 Fixed rather than flagged: the gradient accumulation window is `train.accum_steps` in
 the YAML, the seed is `42` (`SEED` in `train.py`), DataLoader workers are `4`, or `8` for
 batch > 4, and every epoch writes an `epoch_N.pt`.
+
+### Validation and checkpoint selection
+
+After every training epoch the entire validation set is restored at `model.input_size`
+(640x360 by default). Validation uses `torch.inference_mode()` and `net.eval()`, so it
+does not update gradients or BatchNorm statistics. Training and validation must have
+disjoint surface IDs; a shared scene stops the run before training.
+
+`restorer_<tag>_best.pt` is selected by the **highest mean validation PSNR**, not the
+training loss. PSNR/SSIM use the same uint8 image conversion and metric functions as
+`evaluate.py`. Weighted validation loss uses the same four loss terms as training,
+but full validation frames replace random training patches. Detection mAP is not used
+for checkpoint selection.
+
+```yaml
+train:
+  validation:
+    root: datasets/SampleData/sample_eval
+    gt: null
+    save_images: 10
+```
+
+```bash
+python src/train.py --data-root datasets/SampleData/sample_train --val-root datasets/SampleData/sample_eval --epochs 30
+python src/train.py --val-save-images -1  # save all validation restorations per epoch
+python src/train.py --val-save-images 0   # metrics only
+```
+
+`--val-root` overrides `train.validation.root`; `--val-gt` optionally names a separate
+directory containing validation `surface/`. `--sample` caps training only; validation
+always processes every complete triplet. The default saves ten previews, preferring
+one per scene. `-1` saves every restored image; `0` saves no images.
+
+The run contains:
+
+- `loss_log.csv`: training losses, validation losses, validation PSNR and SSIM per epoch.
+- `loss_plots.png`: training/validation loss and validation quality curves.
+- `validation/epoch_NNN/metrics.csv`: metrics for every validation image.
+- `validation/epoch_NNN/restored/*.png`: selected restored images.
+- `validation/epoch_NNN/comparison/*.jpg`: distorted / restored / surface comparisons.
+- `epoch_N.pt` and `restorer_<tag>_best.pt`: architecture, weights, validation metrics,
+  selection criterion, best epoch, seed, and training/validation data paths.
+
+With `--resume`, existing weights initialize a new run, as before; optimizer/scheduler
+state and history are not restored. Validation selects the best newly trained epoch.
+This change does not retrain or replace the previously distributed checkpoint.
 
 ```bash
 python src/train.py --epochs 30

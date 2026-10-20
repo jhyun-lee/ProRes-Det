@@ -1,0 +1,118 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "Melon",
+      "points": [
+        [
+          56.41618497109839,
+          220.7514450867053
+        ],
+        [
+          150.0578034682081,
+          316.7052023121387
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Monkey",
+      "points": [
+        [
+          154.10404624277473,
+          227.39884393063593
+        ],
+        [
+          248.61271676300598,
+          315.5491329479769
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Punica",
+      "points": [
+        [
+          153.8150289017341,
+          38.67052023121384
+        ],
+        [
+          241.9653179190752,
+          127.39884393063582
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "GreenApple",
+      "points": [
+        [
+          50.92485549132944,
+          125.95375722543358
+        ],
+        [
+          146.30057803468185,
+          223.0635838150289
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Snake",
+      "points": [
+        [
+          56.70520231213905,
+          38.95953757225445
+        ],
+        [
+          151.21387283237,
+          122.48554913294797
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "Orange",
+      "points": [
+        [
+          148.61271676300578,
+          131.15606936416188
+        ],
+        [
+          239.36416184971114,
+          226.24277456647408
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "Ori0601144235.jpg",
+  "imageData": null,
+  "imageHeight": 360,
+  "imageWidth": 640
+}

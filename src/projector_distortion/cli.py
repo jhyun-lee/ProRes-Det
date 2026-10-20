@@ -11,10 +11,11 @@ from datetime import datetime
 
 from .config import PROJECT_ROOT, load_config, pick, resolve_path
 
-# The bundled sample set is split three ways under data/SampleData (see
-# data/README_data.md). demo.py and evaluate.py default to the validation split,
+# The bundled sample set is split three ways under datasets/SampleData (see
+# datasets/README_data.md). demo.py and evaluate.py default to the validation split,
 # because it is the only one that ships both surface/ and labels/ for every scene;
-# train.py defaults to SAMPLE_TRAIN and never touches these two.
+# train.py uses the training/validation paths in restoration.yaml and never uses
+# sample_test for checkpoint selection.
 SAMPLE_ROOT = "datasets/SampleData"
 SAMPLE_TRAIN = f"{SAMPLE_ROOT}/sample_train"
 SAMPLE_EVAL = f"{SAMPLE_ROOT}/sample_eval"
@@ -98,7 +99,7 @@ def build_models(device=None, need_detector=True, detector_backend=None):
     from .models import (
         build_detector, build_restorer, detector_names, restorer_names,
     )
-    from .models.restoration import RestorationConfig
+    from .models.restoration import config_from_settings
 
     # A malformed config or a missing PyYAML is the user's problem to fix, not a
     # traceback to read.
@@ -133,8 +134,8 @@ def build_models(device=None, need_detector=True, detector_backend=None):
     # only needed for a legacy bare state_dict. A default-valued block stays None,
     # which is what keeps the checkpoint's own config winning.
     ablation = None
-    if rest_cfg.get("ablation"):
-        from_yaml = RestorationConfig.from_dict(rest_cfg["ablation"])
+    if backend in ("naf_se_unet", "plain_cnn"):
+        from_yaml = config_from_settings(rest_cfg)
         ablation = None if from_yaml.is_default() else from_yaml
 
     try:

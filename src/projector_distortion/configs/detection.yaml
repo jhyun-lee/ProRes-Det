@@ -21,7 +21,7 @@ detector:
   # On the bundled data ssd is the weaker detector before restoration and the
   # stronger demonstration of it: it gains +0.2877 mAP on sample_test against yolo's
   # +0.2148. Both rows are in the README's reference table.
-  backend: ssd
+  backend: [ssd, yolo]
   conf: 0.25
   imgsz: null             # YOLO inference size; null keeps the checkpoint's own
   # Box filter applied to both the captured and the restored pass.
