@@ -22,7 +22,7 @@ the difference — mAP, PSNR, SSIM.
 | [README_running.md](README_running.md) | `demo.py` · `evaluate.py` · `train.py` — every option, input, output |
 | [projector_distortion/README_code.md](src/projector_distortion/README_code.md) | What each module owns, the call graph, the public API |
 | [datasets/README_data.md](datasets/README_data.md) | The three splits, layout, filename rules, both label formats, every `Data.py` stage |
-| [weights/README_weights.md](weights/README_weights.md) | The three checkpoints, checkpoint format, the residual convention |
+| [weights/README_weights.md](weights/README_weights.md) | The four checkpoints, model selection, checkpoint format, the residual convention |
 
 ---
 
@@ -69,7 +69,7 @@ fell back to the CPU says so.
 ## 2. Run
 
 ```bash
-python src/demo.py                    # restore + detect 22 bundled pairs → output/<timestamp>/
+python src/demo.py                    # restore + detect 200 bundled pairs → output/<timestamp>/
 python src/evaluate.py                # before/after mAP + PSNR/SSIM     → output/Eval_<dataset>/
 python src/train.py --epochs 30       # retrain the restorer             → runs/<tag>/
 python src/demo.py --live             # webcam + projector rig           → output/<timestamp>/
@@ -78,9 +78,10 @@ python src/Data.py record --screen 2  # project + record, no models      → dat
 python src/demo.py --video-pair datasets/recordings/rec_<t>.mp4   # replay that recording → result.mp4
 ```
 
-The first three need no arguments. Sample data and all three checkpoints are tracked in
-git, so a clone runs as-is. An editable install also puts `pdf-demo`, `pdf-evaluate` and
-`pdf-train` on the PATH; they are thin wrappers around the same three scripts.
+The first three need no arguments. Sample data is under `datasets/SampleData/`, and
+`weights/` contains two restoration and two detection checkpoints. An editable install
+also puts `pdf-demo`, `pdf-evaluate` and `pdf-train` on the PATH; they are thin wrappers
+around the same three scripts.
 
 The bundled dataset is split three ways under `datasets/SampleData/`, and each entry point
 defaults to its own split:
@@ -150,73 +151,109 @@ at step 2.
 
 ## 3. Reference results
 
-What this repository produces as shipped, so a run can be checked against it rather
-than taken on trust. Reproduce with the commands in each caption — no flags beyond the
-split, and no edits except where noted.
+These results use the current `datasets/SampleData` splits and the two restoration
+checkpoints listed in [weights/README_weights.md](weights/README_weights.md).
+These tables replace the historical results from the smaller dataset release.
+
+Both restorers were trained for 30 epochs on the 3,000 `sample_train` pairs.
+After each epoch, all 200 `sample_eval` pairs were restored without gradients;
+the checkpoint with the highest mean validation PSNR was selected: epoch 28 for
+NAFSE-UNet and epoch 17 for Basic CNN. `sample_test` was reserved for final scoring
+and has **5× as many pairs** as `sample_eval`.
 
 ### Detection, before vs after restoration
 
-The reference metrics below were measured on the previous smaller dataset release. They are historical results; rerun evaluation for the current split counts above.
+D means distorted input; R means restored output. Both passes use the same detector
+weights, confidence threshold of 0.25, and box-size gate (minimum width/height
+20 pixels, minimum area 500 pixels²), with restoration input size 640×360.
+mAP@0.5 and mAP@0.9 are VOC-style interpolated PR areas at separate IoU thresholds,
+not COCO's IoU-averaged mAP. F1 is reported at IoU 0.5.
 
-`sample_test` is the headline: it is held out, it is 9× the size of `sample_eval`, and
-no checkpoint here was fitted on it.
+**`sample_test` — 1,000 pairs, 10 scenes, 10,468 GT instances**
 
-**`sample_test`** — 200 pairs, 5 scenes, 2,131 ground-truth box instances
+| Restorer | Detector | mAP@0.5 (D → R) | mAP@0.9 (D → R) | F1@0.5 (D → R) |
+|---|---|---|---|---|
+| NAFSE-UNet | SSDLite | 0.7101 → **0.9303** | 0.2977 → **0.4867** | 0.6257 → **0.8586** |
+| NAFSE-UNet | YOLO11 | 0.7446 → **0.9239** | 0.3694 → **0.5457** | 0.7787 → **0.9152** |
+| Basic CNN | SSDLite | 0.7101 → **0.8016** | 0.2977 → **0.3392** | 0.6257 → **0.7107** |
+| Basic CNN | YOLO11 | 0.7446 → **0.8122** | 0.3694 → **0.4368** | 0.7787 → **0.8218** |
 
-| Backend | Source | P | R | F1 | mAP@0.5 | TP | FP | FN |
-|---|---|---|---|---|---|---|---|---|
-| yolo | distorted | 0.8143 | 0.7611 | 0.7868 | 0.7804 | 1622 | 370 | 509 |
-| yolo | **restored** | 0.9977 | 0.9986 | 0.9981 | **0.9952** | 2128 | 5 | 3 |
-| | | | | | **+0.2148** | | | |
-| ssd | distorted | 0.5428 | 0.7236 | 0.6203 | 0.7091 | 1542 | 1299 | 589 |
-| ssd | **restored** | 0.9861 | 0.9977 | 0.9918 | **0.9968** | 2126 | 30 | 5 |
-| | | | | | **+0.2877** | | | |
+**`sample_eval` — 200 pairs, 10 scenes, 2,140 GT instances**
 
-**`sample_eval`** — 22 pairs, 10 scenes, 225 ground-truth box instances
+| Restorer | Detector | mAP@0.5 (D → R) | mAP@0.9 (D → R) | F1@0.5 (D → R) |
+|---|---|---|---|---|
+| NAFSE-UNet | SSDLite | 0.8720 → **0.9889** | 0.5264 → **0.7669** | 0.7873 → **0.9668** |
+| NAFSE-UNet | YOLO11 | 0.9010 → **0.9859** | 0.7420 → **0.8668** | 0.8918 → **0.9784** |
+| Basic CNN | SSDLite | 0.8720 → **0.9123** | 0.5264 → **0.5649** | 0.7873 → **0.8275** |
+| Basic CNN | YOLO11 | 0.9010 → **0.9269** | 0.7420 → **0.7680** | 0.8918 → **0.9113** |
 
-| Backend | Source | P | R | F1 | mAP@0.5 | TP | FP | FN |
-|---|---|---|---|---|---|---|---|---|
-| yolo | distorted | 0.8627 | 0.8933 | 0.8777 | 0.8843 | 201 | 32 | 24 |
-| yolo | **restored** | 1.0000 | 1.0000 | 1.0000 | **1.0000** | 225 | 0 | 0 |
-| | | | | | **+0.1157** | | | |
-| ssd | distorted | 0.6793 | 0.8756 | 0.7650 | 0.8086 | 197 | 93 | 28 |
-| ssd | **restored** | 0.9956 | 1.0000 | 0.9978 | **1.0000** | 225 | 1 | 0 |
-| | | | | | **+0.1914** | | | |
-
-The gain holds across two architectures that share nothing but the images they are
-handed, so it is a property of the restoration rather than of one detector.
+For NAFSE-UNet on `sample_test`, SSDLite gains 0.2202 mAP@0.5 and YOLO11 gains
+0.1793. YOLO11 false negatives at IoU 0.5 decrease from 2,634 to 750.
+The two restorers have different capacities (4,184,259 vs 30,371 parameters);
+this compares complete backends under the same training budget, rather than
+isolating the effect of an individual architectural component.
 
 ### Restoration quality
 
-| Split | PSNR distorted | PSNR restored | gain | SSIM distorted | SSIM restored | gain |
-|---|---|---|---|---|---|---|
-| `sample_test` | 16.812 dB | 22.741 dB | +5.929 | 0.7189 | 0.8924 | +0.1735 |
-| `sample_eval` | 13.760 dB | 26.928 dB | +13.168 | 0.7051 | 0.9227 | +0.2176 |
+PSNR and SSIM are computed against the projection-free surface, then averaged over
+the split. These metrics do not depend on the detector.
 
-PSNR and SSIM do not depend on the detector, so one row per split covers both backends.
-
-Note the two move in opposite directions between the splits: `sample_eval` gains far
-more PSNR while `sample_test` gains far more mAP. Pixel fidelity and detectability are
-not the same axis, which is the reason this project scores both.
+| Split | Restorer | Mean PSNR (D → R), dB | Mean SSIM (D → R) |
+|---|---|---|---|
+| `sample_test` | NAFSE-UNet | 16.6488 → **21.9406** | 0.6928 → **0.8590** |
+| `sample_test` | Basic CNN | 16.6488 → **18.8042** | 0.6928 → **0.7860** |
+| `sample_eval` | NAFSE-UNet | 16.3458 → **23.5281** | 0.7667 → **0.8844** |
+| `sample_eval` | Basic CNN | 16.3458 → **19.3022** | 0.7667 → **0.8192** |
 
 ### Reproducing
 
+The shipped defaults are NAFSE-UNet restoration and SSDLite detection. Run from the
+project root. These commands reproduce the default restorer's SSD rows at both IoUs
+without overwriting the reports from the other threshold:
+
 ```bash
-python src/evaluate.py                                       # sample_eval, ssd
-python src/evaluate.py --input datasets/SampleData/sample_test                    --gt    datasets/SampleData/sample_test   # sample_test, ssd
+for split in sample_eval sample_test; do
+  for iou in 0.5 0.9; do
+    tag="${iou/./}"
+    python src/evaluate.py \
+      --input "datasets/SampleData/$split" \
+      --gt "datasets/SampleData/$split" \
+      --iou "$iou" \
+      --output "output/reproduce_naf_se_unet/iou$tag"
+  done
+done
 ```
 
-`ssd` is the default detector, so those two commands reproduce the `ssd` rows exactly.
-The `yolo` rows need one edit, because the detector is configured and never flagged —
-set `detector.backend: [yolo, ssd]` in
-[configs/detection.yaml](src/projector_distortion/configs/detection.yaml) and each entry
-becomes a row of the same report. That also opts into AGPL-3.0 — see
-[License](#8-license).
+Each output directory contains `Eval_sample_eval/report.json` or
+`Eval_sample_test/report.json`, plus per-image and per-class CSVs.
 
-Numbers were produced on the checkpoints tracked in this repository at
-`detector.conf: 0.25` and `--iou 0.5`, the shipped defaults. Restoration is
-deterministic, so a rerun on the same weights reproduces these to the printed digits;
-a different GPU may move the last decimal.
+To include both detector rows, install the optional YOLO dependencies with
+`pip install -e ".[yolo]"`, then set `detector.backend: [ssd, yolo]` in
+[detection.yaml](src/projector_distortion/configs/detection.yaml) and rerun.
+This opts into the YOLO license described in [License](#8-license).
+The default scalar `ssd` runs only SSDLite; `demo.py` uses only the first entry
+when a detector list is configured.
+
+To reproduce the Basic CNN rows, replace the `model` selection in
+[restoration.yaml](src/projector_distortion/configs/restoration.yaml) with:
+
+```yaml
+model:
+  backend: plain_cnn
+  weights: weights/restorer_CNN_best.pt
+  input_size: [640, 360]
+```
+
+Keep `plain_cnn.width: 32` and `plain_cnn.depth: 5`, then rerun the loop with the
+output prefix changed to `output/reproduce_plain_cnn`. Both `model.backend` and
+`model.weights` must match; changing the output directory does not select a model.
+To return to the default, use `backend: naf_se_unet` and
+`weights: weights/restorer_unet_best.pt`.
+
+The reference reports were produced with CUDA. Numerical differences between
+devices and library versions may affect the last printed digits. The detector's
+historical training-pool disclosure is documented in
+[weights/README_weights.md](weights/README_weights.md#detector-training-provenance).
 
 ---
 
@@ -240,8 +277,8 @@ ProRes-Det/
 │   └── tests/                pytest suite, 151 tests
 │
 ├── datasets/                 SampleData/ (train · eval · test), live/ clips, and the
-│                             collection scripts Data.py drives; 349 MiB tracked
-├── weights/                  3 checkpoints, 51 MiB, tracked in git
+│                             collection scripts Data.py drives
+├── weights/                  4 checkpoints: 2 restorers and 2 detectors
 ├── Image/                    the figures above
 └── output/                   run artefacts (git-ignored)
 ```

@@ -1,187 +1,198 @@
 # weights/
 
-The three checkpoints, the checkpoint format, and why the restoration network predicts a
-residual instead of the surface image.
+Two restoration checkpoints and two detector checkpoints, their selection settings,
+and the shared residual convention.
 
 - [Files](#files)
-- [Where the paths come from](#where-the-paths-come-from)
+- [Selecting a restorer and detector](#selecting-a-restorer-and-detector)
+- [Restoration training and selection](#restoration-training-and-selection)
+- [Detector training provenance](#detector-training-provenance)
 - [Checkpoint format](#checkpoint-format)
 - [The residual convention](#the-residual-convention)
 
----
-
 ## Files
 
-All three are committed to git — 51 MiB in total — so a clone runs with no extra download.
-To use your own, point the configs below at them rather than overwriting these.
+The current directory contains four checkpoints (51.5 MiB total).
+Paths in the configuration resolve relative to the project root.
 
-| File | Used for | Architecture | Params | Size |
-|---|---|---|---|---|
-| `restorer_nafse_unet.pt` | restoration | 3-level U-Net of NAFSEBlock | 4,184,259 | 16.1 MiB |
-| `detector_yolo11s.pt` | the `yolo` detector | YOLO11s | 9,434,371 | 18.3 MiB |
-| `detector_ssdlite.pth` | the `ssd` detector | SSDLite320-MobileNetV3-Large | 4,393,592 | 17.0 MiB |
+| File | Role / backend | Architecture | Parameters | Size |
+|---|---|---|---:|---:|
+| `restorer_unet_best.pt` | Default restoration / `naf_se_unet` | Three-level NAFSE-UNet, FULL configuration | 4,184,259 | 16.09 MiB |
+| `restorer_CNN_best.pt` | Basic restoration baseline / `plain_cnn` | Five 3×3 convolutions, width 32 | 30,371 | 0.12 MiB |
+| `detector_ssdlite.pth` | Default detection / `ssd` | SSDLite320-MobileNetV3-Large, 17 classes | 4,393,592 | 17.02 MiB |
+| `detector_yolo11s.pt` | Optional detection / `yolo` | YOLO11s, 17 classes | 9,434,371 | 18.28 MiB |
 
-All three are fine-tuned on the same 17-class projector-distortion dataset — 11 fruits and
-6 animals. The class list lives in
-[configs/detection.yaml](../src/projector_distortion/configs/detection.yaml). The YOLO
-checkpoint carries the same 17 names internally, and those win over the config's list.
-torchvision has no names, so `ssd` always uses the config's list.
+The detector classes are listed in
+[detection.yaml](../src/projector_distortion/configs/detection.yaml).
+YOLO uses the names embedded in its checkpoint; SSDLite uses the configured list.
+The restoration models use image pairs and surface targets, with no detection
+annotations required for restoration training.
 
-### How the detectors were trained
+## Selecting a restorer and detector
 
-Read back out of `detector_yolo11s.pt` itself, so it cannot drift from the file:
-
-| | |
-|---|---|
-| Base model | `yolo11s.pt`, COCO-pretrained |
-| Epochs · image size · batch | 50 · 640 · 16 |
-| Seed | 0 |
-| Ultralytics version · date | 8.4.61 · 2026-06-18 |
-| Its own validation split | mAP@0.5 **0.9939**, mAP@0.5:0.95 0.9484, P 0.9854, R 0.9958 |
-
-`detector_ssdlite.pth` is a bare `state_dict` and carries no training record; it was
-fine-tuned on the same annotated set.
-
-**Why the restored scores sit where they do.** On clean images this detector is already
-at ~0.99 mAP — that is its own held-out validation figure above, measured before any of
-this project's restoration existed. So the restored-side mAP of 0.9952 on `sample_test`
-and 1.0000 on `sample_eval` (see [Reference results](../README.md#3-reference-results))
-is the detector meeting its own ceiling on images restoration has brought back close to
-clean, not the restoration inventing headroom. The number to read is the *gain* over
-the distorted input, which is +0.2148 on the held-out split.
-
-> **Split disclosure.** The detectors were fine-tuned before these three splits were
-> cut, and the annotated pool they were trained on is not distributed here — only
-> `dataset.yaml` is named inside the checkpoint, with no path that survives. Whether
-> any `sample_eval` scene appears in that pool is therefore not answerable from this
-> repository alone, and `sample_eval` should be read as a demonstration split rather
-> than as a detector benchmark. `sample_test` was annotated separately, in LabelMe
-> format, and is the split the reference table leads with for that reason.
-
----
-
-## Where the paths come from
-
-The configs, and only the configs — there is no CLI flag for any of these paths, so a
-checkpoint swap is a one-line edit that every entry point picks up at once:
+Edit `model.backend` and `model.weights` together in
+[restoration.yaml](../src/projector_distortion/configs/restoration.yaml).
+The default NAFSE-UNet selection is:
 
 ```yaml
-# projector_distortion/configs/restoration.yaml
 model:
   backend: naf_se_unet
-  weights: weights/restorer_nafse_unet.pt
-
-# projector_distortion/configs/detection.yaml
-weights:
-  yolo: weights/detector_yolo11s.pt
-  ssd:  weights/detector_ssdlite.pth
+  weights: weights/restorer_unet_best.pt
+  input_size: [640, 360]
 ```
 
-These resolve against the project root, not the working directory.
+For the Basic CNN baseline, replace that selection with:
 
----
+```yaml
+model:
+  backend: plain_cnn
+  weights: weights/restorer_CNN_best.pt
+  input_size: [640, 360]
+
+plain_cnn:
+  width: 32
+  depth: 5
+```
+
+Keep one `model` block in the configuration. The current checkpoints have matching
+architecture metadata; selecting CNN with NAFSE-UNet weights, or vice versa, raises
+a backend mismatch error. No model-selection CLI flag is needed. Both `demo.py`
+and `evaluate.py` read this configuration; output folder names do not select models.
+
+The shipped [detection.yaml](../src/projector_distortion/configs/detection.yaml)
+runs SSDLite only:
+
+```yaml
+detector:
+  backend: ssd
+  conf: 0.25
+
+weights:
+  ssd: weights/detector_ssdlite.pth
+  yolo: weights/detector_yolo11s.pt
+```
+
+YOLO is optional: install `pip install -e ".[yolo]"` and select `backend: yolo`.
+For evaluation with both detectors, use `backend: [ssd, yolo]`. `evaluate.py`
+scores each entry; `demo.py` uses the first one. See
+[THIRD_PARTY.md](../THIRD_PARTY.md) for the YOLO license terms.
+
+From the project root, evaluate the currently selected restorer and detector:
+
+```bash
+python src/evaluate.py \
+  --input datasets/SampleData/sample_test \
+  --gt datasets/SampleData/sample_test \
+  --iou 0.5 \
+  --output output/reproduce_selected/iou05
+```
+
+Use distinct output directories for different restorers and IoU thresholds.
+Latest detection and restoration results, including both backends, are in
+[Reference results](../README.md#3-reference-results).
+
+## Restoration training and selection
+
+Both models were trained for 30 epochs using the same 3,000 `sample_train` pairs,
+seed 42, batch size 4, gradient accumulation of 4, learning rate 0.0002, and
+restoration loss weights. Only training samples update the weights.
+After every epoch, all 200 `sample_eval` pairs are restored at 640×360 without
+gradients or random crops. The checkpoint maximizing mean validation PSNR is
+copied to `weights/`; the 1,000-pair, 10-scene `sample_test` split is reserved
+for final evaluation.
+
+| File | Selected epoch / training budget | Mean validation PSNR | Mean validation SSIM |
+|---|---:|---:|---:|
+| `restorer_unet_best.pt` | 28 / 30 | 23.5281 dB | 0.8844 |
+| `restorer_CNN_best.pt` | 17 / 30 | 19.3022 dB | 0.8192 |
+
+The NAFSE-UNet checkpoint has about 138× as many parameters as the CNN baseline.
+These runs compare complete backends; they are one training run per model,
+not repeated-seed statistics or a capacity-controlled block ablation.
+
+## Detector training provenance
+
+The YOLO checkpoint records a COCO-pretrained `yolo11s.pt` base, 50 fine-tuning
+epochs, image size 640, batch size 16, seed 0, and Ultralytics 8.4.61
+(2026-06-18). Its recorded validation metrics belong to its own detector-training
+split and are separate from the current restoration evaluation.
+`detector_ssdlite.pth` is a bare state dictionary with no embedded training record.
+
+The detectors were fine-tuned before the released restoration splits were formed.
+Their annotated training pool is not distributed here, so overlap with
+`sample_eval` scenes cannot be established from this repository alone.
+`sample_test` annotations were prepared separately in LabelMe format; this
+annotation history alone does not establish disjointness from the detector's
+original training pool. The reported comparisons hold detector weights fixed
+and measure the effect of restoration on the same captured inputs.
 
 ## Checkpoint format
 
-Anything `train.py` produces stores the architecture config next to the weights:
+Both current restoration checkpoints use format 2 with embedded architecture
+configuration and validation-selection metadata. A schematic checkpoint is:
 
 ```python
-{"format": 2, "arch": "naf_se_unet",
- "cfg": {...RestorationConfig...}, "state_dict": {...},
- "epoch": 30, "loss": 0.1234, ...}
+{
+    "format": 2,
+    "arch": "naf_se_unet",  # "plain_cnn" for the Basic CNN checkpoint
+    "cfg": {...},
+    "state_dict": {...},
+    "epoch": 28,
+    "selection_metric": "val_psnr",
+    "selection_mode": "max",
+    "best_epoch": 28,
+    "best_val_psnr": 23.528064169042526,
+    # Training settings and validation results are stored alongside these fields.
+}
 ```
 
-`load_checkpoint()` reads `cfg` and rebuilds the matching architecture, so an ablated
-variant never needs its config restated at inference time.
+`load_checkpoint()` rebuilds the matching network from `arch` and `cfg`.
+Keep architecture settings at their defaults to use the embedded configuration;
+a non-default `ablation` or `plain_cnn` block explicitly overrides configuration
+within the selected model family and must match the stored weights.
 
-```bash
-# ablation: { use_ca: false } in projector_distortion/configs/restoration.yaml
-python src/train.py --epochs 30
-# then point model.weights at runs/0730_1948_30ep_NoCA/restorer_NoCA_best.pt
-python src/demo.py
-#   the ablation block does not have to stay set: the config travels in the checkpoint
-```
-
-Runs print where the config came from:
-
-| `cfg from` | Meaning |
+| `cfg_source` | Meaning |
 |---|---|
-| `embedded` | The checkpoint carried its own `cfg`. Normal for anything `train.py` wrote |
-| `legacy-raw` | A bare `state_dict`, rebuilt from the defaults |
-| `defaults` | Format 2 with no `cfg` key |
-
-`restorer_nafse_unet.pt` is `legacy-raw`: a bare state_dict with no embedded config, so
-it is rebuilt from the defaults — every toggle on, tag `FULL`. A strict load succeeds,
-which confirms the file really is the FULL variant.
-
----
+| `embedded` | Architecture settings came from the checkpoint; normal for both current files |
+| `explicit` | Non-default architecture settings were supplied explicitly |
+| `legacy-raw` | A bare restoration state dictionary, reconstructed from the selected family/defaults |
+| `defaults` | A structured checkpoint without embedded `cfg` |
 
 ## The residual convention
 
-The restoration network does not draw the restored image. It emits the light to subtract
-from `distorted`:
+Both restorers accept the distorted capture and its projected light image,
+concatenated into six channels, and predict a three-channel residual:
 
-```
-input   (B, 6, H, W) = cat([distorted, light])  in [-1, 1]
-output  (B, 3, H, W) = residual
+```text
+input    (B, 6, H, W) = cat([distorted, light]) in [-1, 1]
+residual (B, 3, H, W) = net(input)
 restored = (distorted - residual).clamp(-1, 1)
 ```
 
-### Why the residual, not the surface image
+NAFSE-UNet uses a U-Net of NAFSE blocks; Basic CNN uses five 3×3 convolutions
+with channels 6 → 32 → 32 → 32 → 32 → 3, ReLU after the first four layers,
+and Tanh at the output. Both current checkpoints bound the residual with Tanh.
 
-**1) Preserving the original becomes the default.**
-Where no projector light lands, residual ≈ 0 is enough and the `distorted` pixel passes through
-untouched. "Do nothing" is the identity, so the network only has to learn what must
-change. Regressing surface directly forces it to regenerate perfectly good background too,
-which smears regions that should have been left alone.
-
-**2) It blocks the "paint the objects in" overfit.**
-If the network outputs surface directly, the fastest way to drive the loss down is to largely
-ignore the input and reproduce a screen memorised from the training set. The bundled data
-makes that especially tempting: 10 surface images back 22 `distorted` captures, so surface repeats
-and memorising the target per `surfaceId` pays off. A model trained that way makes the detector
-see objects that were never there, which destroys the whole point of the evaluation.
-`restored = distorted − residual` forces the output to always derive from real camera pixels.
-
-**3) Values cannot blow up.**
-The output `tanh` bounds the residual to [-1, 1], and `clamp(-1, 1)` bounds the result
-after the subtraction — two layers of range control. `use_tanh: false` removes the first;
-that is one of the ablation switches.
-
-### How it is enforced — the loss is on `restored`, not on the residual
-
-The subtraction lives inside the graph. The residual is never given a target of its own;
-only the subtracted result is compared against surface. What to subtract is left for the
-network to discover.
+Training compares the restored image against its projection-free surface target;
+the residual has no separate target. The configured loss is:
 
 ```python
-residual = net(torch.cat([distorted, light], dim=1))     # network output
-restored = (distorted - residual).clamp(-1, 1)          # subtraction inside the graph
-loss = (0.93 * L1(restored, surface)
-      + 2.04 * Perceptual(restored, surface)
-      + 0.53 * (1 - SSIM(restored, surface))
-      + 0.90 * WaveletHF(restored, surface))        # all four measure `restored`
+loss = (0.9262 * L1(restored, surface)
+      + 2.0369 * Perceptual(restored, surface)
+      + 0.5319 * (1 - SSIM(restored, surface))
+      + 0.8977 * WaveletHF(restored, surface))
 ```
 
-| Loss term | What it measures | What it penalises |
-|---|---|---|
-| `L1` | Absolute pixel error | Global colour / brightness drift |
-| `Perceptual` (VGG19 relu3_3) | Feature-map distance | Pixel-close results whose structure is broken |
-| `1 − SSIM` | Local luminance, contrast, structure | Flat output that only matched the mean |
-| `WaveletHF` (Haar LH/HL/HH, LL excluded) | Edges and texture only | Blurring everything to lower the loss |
+The perceptual term uses VGG19 features; the wavelet term compares Haar
+high-frequency bands. See [train.py](../src/train.py) and
+[restoration.yaml](../src/projector_distortion/configs/restoration.yaml).
+In the training split, 20 surface targets are shared across 3,000 captures with
+different projected illumination. Predicting a residual provides an identity path
+from the capture, but does not by itself guarantee that a model cannot memorize
+scenes or generate incorrect content. Scene-disjoint evaluation remains necessary.
 
-Dropping the low-frequency LL band is the point of `WaveletHF`. Blurring the whole image
-still lowers L1, but not the high-frequency term. That is what makes the residual follow
-the actual boundaries of the projected light.
-
-The weights live under `train.loss` in
-[configs/restoration.yaml](../src/projector_distortion/configs/restoration.yaml) and come from
-an Optuna sweep on this dataset. Implementation: [train.py](../src/train.py).
-
-> A custom restorer that emits surface directly still satisfies the `BaseRestorer` interface.
-> In that case the `residual` visualisation and the `residual_mean` metric lose their
-> meaning, and both advantages above are gone. See
-> [Swapping modules](../README.md#6-swapping-modules).
+A custom restorer that emits the surface directly can still implement
+`BaseRestorer`; see [Swapping modules](../README.md#6-swapping-modules).
 
 ---
 
