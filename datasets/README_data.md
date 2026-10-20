@@ -44,8 +44,8 @@ datasets/
 │   ├── sample_test/        held out; only evaluate.py --input reaches it
 │   │   ├── distorted/  1,000 files, 640×360
 │   │   ├── light/      1,000 files, unique illumination images
-│   │   ├── surface/       15 files, 10 scenes with captured pairs
-│   │   └── labels/        15 files, LabelMe JSON, 10,468 GT instances over captured pairs
+│   │   ├── surface/       10 files, 10 scenes with captured pairs
+│   │   └── labels/        10 files, LabelMe JSON, 10,468 GT instances over captured pairs
 ├── live/                   the projection sources, split by role       121 MiB
 │   ├── train_light_1.mp4   what `Data.py make_light` turns into training light frames
 │   │                       4,262 frames @30fps = 2.4 min, 854×480, 15 MiB
@@ -105,7 +105,7 @@ The scenes do not overlap. No `surfaceId` in `sample_train` appears in `sample_e
 |---|---|---|---|---|
 | `sample_train` | 3,000 | 20 | none | `train.py`, via `train.data` in [restoration.yaml](../src/projector_distortion/configs/restoration.yaml) |
 | `sample_eval` | 200 | 10 | YOLO txt, 2,140 GT instances | `demo.py` and `evaluate.py` — the default for both |
-| `sample_test` | 1,000 | 10 captured (15 surfaces) | LabelMe JSON, 10,468 GT instances | nothing by default; pass `--input`/`--gt` |
+| `sample_test` | 1,000 | 10 | LabelMe JSON, 10,468 GT instances | nothing by default; pass `--input`/`--gt` |
 
 ```bash
 python src/train.py                                          # sample_train
@@ -123,10 +123,9 @@ and samples video time bins and illumination variants. Different original video
 frames are preferred; distinct brightness/inversion variants may share a video
 frame number. No light image is duplicated to increase the file count.
 
-All surface images and annotations are preserved. The test split retains 15
-annotated surfaces, of which 10 have captured pairs. The eval split has 107
-distinct annotated boxes; the test split has 162 across its 15 surfaces
-(102 across its 10 captured scenes). GT instances repeat the scene annotation
+The test split contains only its 10 scenes with captured pairs, with one surface
+image and one annotation file per scene. The eval split has 107 distinct annotated
+boxes; the test split has 102. Five scenes without captured pairs are excluded. GT instances repeat the scene annotation
 for each retained captured pair. Rebuilding changes training and evaluation
 samples: train and evaluate the models again for results on this release.
 

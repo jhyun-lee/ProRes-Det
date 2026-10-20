@@ -89,7 +89,7 @@ defaults to its own split:
 |---|---|---|
 | `sample_train` | 3,000 pairs, 20 scenes, no labels | `train.py` |
 | `sample_eval` | 200 pairs, 10 scenes, 2,140 GT instances | `demo.py`, `evaluate.py` |
-| `sample_test` | 1,000 pairs, 10 captured scenes, 10,468 GT instances | held out — pass `--input`/`--gt` to reach it |
+| `sample_test` | 1,000 pairs, 10 scenes, 10,468 GT instances | held out — pass `--input`/`--gt` to reach it |
 
 The scenes do not overlap, so a model trained on `sample_train` is scored on frames it has
 never seen. Details and the two label formats: [datasets/README_data.md](datasets/README_data.md).
