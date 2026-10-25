@@ -21,5 +21,8 @@ datasets/SampleData/sample_train_*/
 data/collected_*/
 data/recordings/
 paper/
+# Detector fine-tuning pool, kept locally for reference; not distributed (see
+# weights/README_weights.md#detector-training-provenance).
+datasets/Dectecting_LearningData_V4/
 # weights/*.pt and *.pth are committed on purpose (51 MiB) so a clone runs as-is.
 # Checkpoints you train yourself land in runs/, which is ignored above.

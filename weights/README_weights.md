@@ -118,13 +118,12 @@ epochs, image size 640, batch size 16, seed 0, and Ultralytics 8.4.61
 split and are separate from the current restoration evaluation.
 `detector_ssdlite.pth` is a bare state dictionary with no embedded training record.
 
-The detectors were fine-tuned before the released restoration splits were formed.
-Their annotated training pool is not distributed here, so overlap with
-`sample_eval` scenes cannot be established from this repository alone.
-`sample_test` annotations were prepared separately in LabelMe format; this
-annotation history alone does not establish disjointness from the detector's
-original training pool. The reported comparisons hold detector weights fixed
-and measure the effect of restoration on the same captured inputs.
+The detectors were fine-tuned before the released restoration splits were formed,
+on projection-free surface images of scenes outside `sample_eval` and `sample_test`:
+no evaluation or test scene was in their training or validation images. Their
+annotated training pool is not distributed here. The reported comparisons hold
+detector weights fixed and measure the effect of restoration on the same captured
+inputs.
 
 ## Checkpoint format
 
