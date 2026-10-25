@@ -10,7 +10,8 @@ This document details the licenses and intellectual property notices for third-p
 |---|---|---|---|
 | **ProRes-Det Source Code** | Core framework, pipeline, CLI, evaluation | **MIT License** | [LICENSE.txt](LICENSE.txt) |
 | **ProRes-Det Dataset** (`SampleData/`) | Bundled image pairs and benchmark ground truth | **MIT License** | Self-collected |
-| **Restoration Weights** (`restorer_nafse_unet.pt`) | Pre-trained restoration model checkpoint | **MIT License** | Fitted from scratch by ProRes-Det |
+| **Restoration Weights** (`restorer_unet_best.pt`) | Default restoration checkpoint (NAFSE-UNet) | **MIT License** | Fitted from scratch by ProRes-Det on `sample_train` |
+| **Restoration Weights** (`restorer_CNN_best.pt`) | Basic CNN restoration baseline checkpoint | **MIT License** | Fitted from scratch by ProRes-Det on `sample_train` |
 | **SSDLite Weights** (`detector_ssdlite.pth`) | Default detection model checkpoint | **BSD-3-Clause** | PyTorch / torchvision |
 | **YOLO11s Weights** (`detector_yolo11s.pt`) | Optional alternative detection checkpoint | **AGPL-3.0** | Ultralytics YOLO11 fine-tune |
 

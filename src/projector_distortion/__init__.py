@@ -6,7 +6,7 @@ before and after restoration.
     from projector_distortion.data import find_samples
     from projector_distortion.pipeline import process_sample
 
-    restorer = build_restorer("naf_se_unet", "weights/restorer_nafse_unet.pt")
+    restorer = build_restorer("naf_se_unet", "weights/restorer_unet_best.pt")
     detector = build_detector("ssd", "weights/detector_ssdlite.pth")
     # distorted/ light/ + surface/ labels/ for scoring
     root = "datasets/SampleData/sample_eval"
@@ -15,7 +15,7 @@ before and after restoration.
         print(s.name_id, len(r.det_distorted), "->", len(r.det_restored))
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 
 from .config import PROJECT_ROOT, load_config, resolve_path
 from .models import (

@@ -401,18 +401,19 @@ complete component-by-component breakdown and license boundary guarantees.
 
 ## 9. Citation
 
-If this software is useful in your research, please cite it. Zenodo issues two DOIs:
-**10.5281/zenodo.22153821** always resolves to the newest release and is what the
-badge above points at, while the one in the entry below is pinned to v1.0.0. Cite the
-pinned one — a result is reproducible against a version, not against "latest".
+If this software is useful in your research, please cite it. Zenodo issues two kinds of
+DOI: **10.5281/zenodo.22153821** always resolves to the newest release and is what the
+badge above points at, and each release also gets its own version DOI, listed on that
+Zenodo page. Cite the version DOI of the release you used — a result is reproducible
+against a version, not against "latest".
 
 ```bibtex
 @software{lee_prores_det,
-  author  = {Lee, JeongHyun},
+  author  = {Lee, JeongHyeon},
   title   = {{ProRes-Det: Projector Restoration and Detection}},
   year    = {2026},
-  version = {1.0.0},
-  doi     = {10.5281/zenodo.22153822},
+  version = {1.1.0},
+  doi     = {10.5281/zenodo.22153821},
   url     = {https://github.com/jhyun-lee/ProRes-Det}
 }
 ```

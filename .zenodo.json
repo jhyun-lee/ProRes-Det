@@ -1,0 +1,22 @@
+{
+  "title": "ProRes-Det: Projector Restoration and Detection",
+  "upload_type": "software",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Lee, JeongHyeon",
+      "affiliation": "Department of Computer Science and Engineering, Gyeongsang National University"
+    }
+  ],
+  "description": "<p>A camera pointed at a projected screen sees the projector's light on top of the scene. ProRes-Det removes that light from the capture and scores object detection on the same frame before and after restoration, so the benefit of the restoration is measured rather than asserted.</p><p>Restoration (NAFSE-UNet and a basic CNN baseline) and detection (SSDLite and YOLO11) are registry-selected backends behind one image contract, so either stage is replaced through configuration without touching the pipeline. Offline evaluation, replay of a recorded session and a live webcam-plus-projector rig share one code path.</p><p>The archive includes scene-disjoint train / validation / test splits (3,000 / 200 / 1,000 pairs) and all trained checkpoints, so the offline evaluation runs without projector-camera hardware.</p>",
+  "keywords": [
+    "projector-camera systems",
+    "spatial augmented reality",
+    "image restoration",
+    "object detection",
+    "reproducible research"
+  ],
+  "language": "eng",
+  "notes": "This repository is MIT licensed. It additionally redistributes weights/detector_yolo11s.pt, a fine-tune of an Ultralytics YOLO11 checkpoint, under AGPL-3.0; the default configuration uses SSDLite (BSD-3-Clause) instead. See THIRD_PARTY.md in the archive for the full third-party accounting."
+}

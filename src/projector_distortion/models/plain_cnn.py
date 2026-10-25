@@ -33,6 +33,11 @@ class PlainCNNConfig:
         return self == PlainCNNConfig()
 
     def tag(self):
+        # The default capacity tags as plain `CNN`, so a fresh run writes
+        # restorer_CNN_best.pt - the name the shipped checkpoint carries. Any other
+        # capacity keeps width and depth in the name to stay identifiable.
+        if self.is_default():
+            return "CNN"
         return f"CNN-W{self.width}-D{self.depth}"
 
     def describe(self):

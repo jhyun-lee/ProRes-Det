@@ -80,8 +80,9 @@ Then run `python src/train.py` from the repository root. `model.weights` is not 
 for fresh training; `--resume` explicitly loads a checkpoint and its architecture.
 The same `SampleData/sample_train` and `SampleData/sample_eval` paths and loss
 weights apply to both models. Every epoch validates the full eval split; maximum
-mean validation PSNR selects `restorer_CNN-W32-D5_best.pt`. The test split remains
-for final evaluation.
+mean validation PSNR selects `restorer_CNN_best.pt` (a non-default width or depth is
+written as `restorer_CNN-W<width>-D<depth>_best.pt`). The test split remains for final
+evaluation.
 
 After training, keep `model.backend: plain_cnn` and set `model.weights` to that
 run's best checkpoint. Run the usual `python src/demo.py` or `python src/evaluate.py`
@@ -91,8 +92,9 @@ cannot initialize the CNN. CNN checkpoints embed their architecture, width and
 depth. A default YAML block lets embedded capacity take precedence; an explicit
 nondefault block overrides capacity and must match the weights, as for NAF.
 
-The default backend remains `naf_se_unet`. Adding the CNN implementation does not
-provide a trained CNN checkpoint or measured baseline detection results.
+The default backend remains `naf_se_unet`. A CNN trained this way ships as
+`weights/restorer_CNN_best.pt` (epoch 17 of 30, selected by validation PSNR); its
+before/after scores are in [Reference results](README.md#3-reference-results).
 
 ---
 
@@ -254,39 +256,41 @@ drives monitor placement through the Win32 API instead.
 
 ### Playback and analysis run at different rates
 
-The projector plays the clip at the clip's own fps no matter how slow the model is.
-Restore+detect runs on a worker thread over an evenly spaced subset — every Nth frame. The
-recorded panel plays like the clip, only at a lower rate. Frames in between are still
-projected and captured, just not scored.
+Each pass of the main loop reads one camera frame, rectifies it, shows the next clip frame
+on the projector, and hands every Nth frame to a worker thread for restore + detect. The
+model never runs inside this loop, so a slower model raises N; it does not slow projection.
+Frames in between are still projected and captured, just not scored.
 
-N is measured, not named: the run times its first dozen analysed frames, discards the
-CUDA warmup outlier, and fixes N from the median — the densest stride that stays
-perfectly evenly spaced. It is never re-tuned mid-run, because changing N is itself
-what makes the analysed video uneven.
+What does pace the loop is the camera. `cam.read()` blocks until the next frame arrives,
+so the clip is projected at whichever is lower: its own fps or the rate the camera actually
+delivers. Drivers report the rate they were asked for, not the one they deliver. On the
+reference rig the camera opens as 1280×720 @30fps but delivers about 10 fps
+(`video.measured_fps` in a `Data.py record` sidecar, over 120 s), and the live loop projects
+at about 10 fps to match. Check that number before reading anything into a live projector
+rate.
 
-The summary reports both rates:
+N is measured, not named: the run times its first dozen analysed frames, discards the first
+two (CUDA warmup), and sets N = ⌈1.2 × clip fps × median worker time⌉ — the densest stride
+the worker sustains with 20% headroom, so analysed frames stay evenly spaced. It is never
+re-tuned mid-run, because changing N is itself what makes the analysed video uneven. N is
+computed against the clip's fps, not the loop's actual rate, so on a camera-bound loop the
+worker has slack and analyses fewer frames than it could.
+
+The summary reports both rates. From a run on the reference rig (SSDLite, CUDA, the ~10 fps
+camera above):
 
 ```
-projector 29.1 fps (450 frames) | analysis 13.0 fps (every 2 frame(s): 201 analysed,
-249 skipped, 0 dropped)
+projector 9.8 fps (555 frames) | analysis 5.0 fps (every 2 frame(s): 280 analysed,
+274 skipped, 0 dropped)
 ```
 
-`skipped` is by design — those frames were never meant for the model. `dropped` means the
-worker missed its deadline. That is the number to watch.
-
-Denser than the measured value costs evenness, which is why it is not offered as a
-knob. On a 30 fps clip with a worker taking ~41 ms:
-
-| stride | projector | analysis | frames analysed | spacing |
-|---|---|---|---|---|
-| `1` | 28.5 fps | 21.8 fps | 76% | 89% even |
-| `2` (measured here) | 28.8 fps | 13.9 fps | 48% | 100% even |
-| `3` | 28.8 fps | 9.4 fps | 32% | 100% even |
-
-`1` analyses 1.6x more frames and barely touches playback, but it cannot hit every slot:
-a 30 fps budget is 33 ms and the worker needs 41. The run picks `2` — the densest stride
-that stays exactly even — because an unevenly sampled panel is harder to read than a
-sparser one.
+`projector` is clip frames shown per second of loop time — `loop_sec` in `run_meta.json`,
+which stops when the loop exits and leaves out the final drain and the shutdown waits. (The
+run above predates `loop_sec`, so its projector figure still includes about a second of
+shutdown.) `analysis` is analysed frames per second up to the last result handed back.
+`skipped` is by design: off-stride frames, plus on-stride frames that arrived while the
+queue was still full. `dropped` counts analysed frames whose result never reached the main
+loop. That is the number to watch.
 
 ### Calibration
 

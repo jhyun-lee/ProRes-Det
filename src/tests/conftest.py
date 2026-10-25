@@ -14,7 +14,7 @@ if SRC not in sys.path:
 WEIGHTS = os.path.join(ROOT, "weights")
 DATA = os.path.join(ROOT, "datasets")
 
-RESTORER_W = os.path.join(WEIGHTS, "restorer_nafse_unet.pt")
+RESTORER_W = os.path.join(WEIGHTS, "restorer_unet_best.pt")
 YOLO_W = os.path.join(WEIGHTS, "detector_yolo11s.pt")
 SSD_W = os.path.join(WEIGHTS, "detector_ssdlite.pth")
 

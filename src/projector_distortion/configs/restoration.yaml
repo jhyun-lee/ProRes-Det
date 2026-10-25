@@ -12,7 +12,7 @@ model:
   # never learn which backend they are talking to.
   
   # Basic baseline: set backend: plain_cnn, then python src/train.py. After training, point
-  # weights below at that run's restorer_CNN-W32-D5_best.pt before demo/evaluate.
+  # weights below at that run's restorer_CNN_best.pt before demo/evaluate.
   
   # backend: plain_cnn
   # weights: weights/restorer_CNN_best.pt

@@ -748,6 +748,7 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
     # The projector must keep the clip's own cadence; analysis throughput is separate.
     frame_interval = 1.0 / max(clip_fps, 1e-6)
     next_frame_at = time.perf_counter()
+    loop_end = drain_end = None
 
     try:
         while not stop:
@@ -811,8 +812,14 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
             _hold_until(next_frame_at)
             next_frame_at = max(next_frame_at + frame_interval, time.perf_counter())
 
+        # Timed before anything below: the final drain and the shutdown waits (up to
+        # 3 s for the worker, 30 s for the writer) are not the loop, and folding them
+        # into the rates made fps_projector report a fraction of the held cadence.
+        loop_end = time.time()
         collect(block=True)     # the clip ended; finish what the worker still holds
+        drain_end = time.time()
     except KeyboardInterrupt:
+        loop_end = loop_end or time.time()
         print("\ninterrupted.")
     finally:
         stop_event.set()
@@ -826,7 +833,11 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         cv2.destroyAllWindows()
 
     n = max(processed, 1)
-    elapsed = max(time.time() - t0, 1e-6)
+    now = time.time()
+    # Projector rate over the loop alone; analysis rate up to the last result handed
+    # back, which the final drain still delivers but the writer flush does not.
+    loop_sec = max((loop_end or now) - t0, 1e-6)
+    analysis_sec = max((drain_end or loop_end or now) - t0, 1e-6)
     summary = {
         "frames_projected": frame_count,
         "frames_processed": processed,
@@ -835,8 +846,9 @@ def run_live(video, restorer, detector, recorder, background=None, camera=0,
         "writes_dropped": writes_dropped,
         "write_errors": len(write_errors),
         "analyse_every": stride,
-        "fps_projector": round(frame_count / elapsed, 2),
-        "fps_end_to_end": round(processed / elapsed, 2),
+        "loop_sec": round(loop_sec, 2),
+        "fps_projector": round(frame_count / loop_sec, 2),
+        "fps_end_to_end": round(processed / analysis_sec, 2),
         "detections_total": totals,
         "detections_per_frame": {k: round(v / n, 3) for k, v in totals.items()},
         "residual_mean": round(sums["residual"] / n, 5),

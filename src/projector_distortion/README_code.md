@@ -208,7 +208,7 @@ from projector_distortion import build_restorer, build_detector
 from projector_distortion.data import find_samples
 from projector_distortion.pipeline import process_sample
 
-restorer = build_restorer("weights/restorer_nafse_unet.pt")
+restorer = build_restorer("naf_se_unet", "weights/restorer_unet_best.pt")
 detector = build_detector("ssd", "weights/detector_ssdlite.pth")
 root = "datasets/SampleData/sample_eval"     # distorted/ light/ + surface/ labels/ for scoring
 for i, s in enumerate(find_samples(root, root)):
