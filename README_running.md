@@ -292,6 +292,14 @@ shutdown.) `analysis` is analysed frames per second up to the last result handed
 queue was still full. `dropped` counts analysed frames whose result never reached the main
 loop. That is the number to watch.
 
+That run is a timing record, not an accuracy one, and it predates v1.1.0: it used an earlier
+checkpoint and has not been reproduced with the released configuration. It was stopped with
+Ctrl+C, which is why 280 + 274 falls one short of 555. The last admitted frame (554) was
+analysed and recorded, so `saved_frames` in its `run_meta.json` reads 281, but an interrupt
+skips the final drain, so that result never reached the main loop. A frame in flight at an
+interrupt therefore counts as neither `analysed` nor `dropped`; leaving with `q` or reaching
+the end of the clip drains it.
+
 ### Calibration
 
 Black/white flash → the two camera shots are differenced, so ambient light cancels and

@@ -36,7 +36,7 @@ datasets/
 │   │   ├── distorted/  3,000 files, 640×360
 │   │   ├── light/      3,000 files, unique illumination images
 │   │   └── surface/       20 files, 640×360     — no labels/, training needs none
-│   ├── sample_eval/        what demo.py and evaluate.py default to
+│   ├── sample_eval/        validation; what demo.py and evaluate.py default to
 │   │   ├── distorted/    200 files, 640×360
 │   │   ├── light/        200 files, varying source sizes
 │   │   ├── surface/       10 files, 640×360
@@ -100,6 +100,8 @@ so training and evaluation run without them. Delete them if you need neither.
 
 The scenes do not overlap. No `surfaceId` in `sample_train` appears in `sample_eval` or
 `sample_test`, so a checkpoint trained on the first is scored on scenes it has never seen.
+`sample_eval` also selects the restoration checkpoint, so its scores are validation results;
+`sample_test` is the held-out evidence.
 
 | Split | Pairs | Scenes | Labels | Read by |
 |---|---|---|---|---|

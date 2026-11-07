@@ -16,7 +16,8 @@ backend in the same report:
       backend: [yolo, ssd]
 
 Both labelled splits live under datasets/SampleData: sample_eval (200 pairs, YOLO txt
-labels) is the default, sample_test (1,000 pairs, LabelMe json labels) is held out.
+labels) is the default, and since it also selects the restoration checkpoint its scores
+are validation results; sample_test (1,000 pairs, LabelMe json labels) is held out.
 Either format is read directly, so --gt only ever needs the split root.
 
 Reports, for the distorted image and the restored one:

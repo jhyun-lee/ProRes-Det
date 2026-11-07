@@ -83,7 +83,7 @@ train:
   lr: 0.0002
   patch_size: [180, 320]      # (height, width) random crop
   resize_to: [360, 640]       # (height, width) before cropping
-  # Loss weights from the Optuna sweep on this dataset.
+  # Loss weights from an Optuna sweep on earlier development data, not re-tuned for these splits.
   loss:
     l1: 0.9262
     perceptual: 2.0369

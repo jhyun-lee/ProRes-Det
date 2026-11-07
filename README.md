@@ -93,7 +93,9 @@ defaults to its own split:
 | `sample_test` | 1,000 pairs, 10 scenes, 10,468 GT instances | held out — pass `--input`/`--gt` to reach it |
 
 The scenes do not overlap, so a model trained on `sample_train` is scored on frames it has
-never seen. Details and the two label formats: [datasets/README_data.md](datasets/README_data.md).
+never seen. `sample_eval` also selects the restoration checkpoint, so its scores are validation
+results; `sample_test` is the held-out evidence. Details and the two label formats:
+[datasets/README_data.md](datasets/README_data.md).
 
 **Run from the repo root.** Config paths resolve against the project root, but the
 `train.data` globs are read against the working directory.
@@ -169,7 +171,7 @@ weights, confidence threshold of 0.25, and box-size gate (minimum width/height
 mAP@0.5 and mAP@0.9 are VOC-style interpolated PR areas at separate IoU thresholds,
 not COCO's IoU-averaged mAP. F1 is reported at IoU 0.5.
 
-**`sample_test` — 1,000 pairs, 10 scenes, 10,468 GT instances**
+**`sample_test` (held-out test) — 1,000 pairs, 10 scenes, 10,468 GT instances**
 
 | Restorer | Detector | mAP@0.5 (D → R) | mAP@0.9 (D → R) | F1@0.5 (D → R) |
 |---|---|---|---|---|
@@ -178,7 +180,7 @@ not COCO's IoU-averaged mAP. F1 is reported at IoU 0.5.
 | Basic CNN | SSDLite | 0.7101 → **0.8016** | 0.2977 → **0.3392** | 0.6257 → **0.7107** |
 | Basic CNN | YOLO11 | 0.7446 → **0.8122** | 0.3694 → **0.4368** | 0.7787 → **0.8218** |
 
-**`sample_eval` — 200 pairs, 10 scenes, 2,140 GT instances**
+**`sample_eval` (validation, selects the checkpoint) — 200 pairs, 10 scenes, 2,140 GT instances**
 
 | Restorer | Detector | mAP@0.5 (D → R) | mAP@0.9 (D → R) | F1@0.5 (D → R) |
 |---|---|---|---|---|
@@ -274,7 +276,7 @@ ProRes-Det/
 │   │   ├── models/           restoration + detection models
 │   │   ├── pipeline/         offline / live / replay run loops
 │   │   └── utils/            image, visualization, recording and display helpers
-│   └── tests/                pytest suite, 151 tests
+│   └── tests/                pytest suite, 165 tests
 │
 ├── datasets/                 SampleData/ (train · eval · test), live/ clips, and the
 │                             collection scripts Data.py drives
@@ -365,7 +367,9 @@ flag for either.
 
 `light` — the frame the projector emitted at that moment — is passed to every restorer
 because it is the one signal a ProCam rig has and an ordinary restoration setting does
-not. A single-image backend simply ignores it.
+not. Both shipped restorers use it and predict a residual. A single-image or non-residual
+backend fits the same interface by ignoring `light` or returning zeros as the residual, but
+only a stub in the test suite exercises that path; no such trained model has been evaluated.
 
 Interfaces, the call graph and the public API:
 [README_code.md](src/projector_distortion/README_code.md).

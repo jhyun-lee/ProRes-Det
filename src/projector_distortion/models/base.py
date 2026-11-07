@@ -9,10 +9,12 @@ projector emitted at that moment. A backend is free to ignore `light` - that is 
 a single-image restoration network does - but it is offered because it is the one
 signal a ProCam rig has and an ordinary restoration setting does not.
 
-The shipped network predicts the *residual* to subtract rather than the surface image
-directly. That is this backend's choice, not the interface's: a restorer that emits
-the surface image can return it alongside any residual-shaped array it likes, at the
-cost of the residual view and `residual_mean` losing their meaning.
+Both shipped networks (`naf_se_unet`, `plain_cnn`) use `light` and predict the *residual*
+to subtract rather than the surface image directly. That is their choice, not the
+interface's: a restorer that emits the surface image can return it alongside any
+residual-shaped array it likes, at the cost of the residual view and `residual_mean`
+losing their meaning. Only a stub in the test suite exercises that path; no such trained
+model has been evaluated.
 
 Both stages are picked by name from a registry (`@register_restorer`,
 `@register_detector`), so swapping either is a config edit rather than a code edit.

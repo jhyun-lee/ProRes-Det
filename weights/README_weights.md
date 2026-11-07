@@ -191,7 +191,8 @@ from the capture, but does not by itself guarantee that a model cannot memorize
 scenes or generate incorrect content. Scene-disjoint evaluation remains necessary.
 
 A custom restorer that emits the surface directly can still implement
-`BaseRestorer`; see [Swapping modules](../README.md#6-swapping-modules).
+`BaseRestorer`; see [Swapping modules](../README.md#6-swapping-modules). Neither shipped
+checkpoint does so, and only a stub in the test suite exercises that path.
 
 ---
 

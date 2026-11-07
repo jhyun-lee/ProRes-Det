@@ -18,7 +18,8 @@ uses the ablation block; plain_cnn uses the plain_cnn block. A resumed checkpoin
 carries its own architecture and config. Run directories identify the variant.
 
 Loss: L1 + VGG perceptual + (1 - SSIM) + high-frequency Haar, weights from
-configs/restoration.yaml (tuned by an Optuna sweep on this dataset).
+configs/restoration.yaml (from an Optuna sweep on earlier development data, not
+re-tuned for these splits).
 
 The network predicts the residual, so the supervised quantity is
 `(distorted - residual).clamp(-1, 1)` against the surface image. Checkpoints embed
